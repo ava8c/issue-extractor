@@ -5,6 +5,7 @@ import { defaultEmailSettings, emptyEmailStatus } from './shared/email'
 import { readNotificationPreferences } from './shared/activity'
 import { metricSnapshot } from './shared/metrics'
 import { defaultAISettings, defaultProjectEstimates, type IssueEstimate } from './shared/estimates'
+import { defaultMonitoringSettings, emptyMonitoringStatus } from './shared/monitoring'
 
 const base = 'https://github.servizi.allitude.it'
 const createdAt = '2026-10-21T08:24:00Z'
@@ -311,6 +312,17 @@ function download(bytes: Uint8Array, name: string) {
   setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 export const demoAPI: AtlasAPI = {
+  monitoringSettings: async () => defaultMonitoringSettings(),
+  saveMonitoringSettings: async () => {
+    throw new Error('Configura Monitoraggio nell’app macOS.')
+  },
+  verifyMonitoring: async () => {
+    throw new Error('La connessione a Monitoraggio è disponibile nell’app macOS.')
+  },
+  monitoringStatus: async () => emptyMonitoringStatus(),
+  retryMonitoring: async () => {
+    throw new Error('Gli invii sono disponibili nell’app macOS.')
+  },
   handoffStatus: async () =>
     window.atlas
       ? window.atlas.handoffStatus()

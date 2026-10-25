@@ -239,6 +239,8 @@ test(
     assert.equal(s.service.state(['P1']).usage.requests, 3)
     assert.equal(s.service.state(['P1']).usage.chargedTokens, 640)
     assert.ok(!(await readFile(s.path, 'utf8')).includes('Testo riservato non pertinente.'))
+    assert.equal(s.service.monitoringCandidates()[0].issue.id, s.detail.id)
+    assert.ok(!('body' in s.service.monitoringCandidates()[0].issue))
     const restored = new EstimateService(
       s.path,
       'scope-test',

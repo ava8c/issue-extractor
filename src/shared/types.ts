@@ -114,6 +114,11 @@ export interface ActivitySyncResult extends NotificationState {
   errors: string[]
 }
 export interface AtlasAPI {
+  monitoringSettings: () => Promise<MonitoringSettings>
+  saveMonitoringSettings: (input: MonitoringSettingsInput) => Promise<MonitoringSettings>
+  verifyMonitoring: (input: MonitoringSettingsInput) => Promise<void>
+  monitoringStatus: () => Promise<MonitoringStatus>
+  retryMonitoring: () => Promise<void>
   handoffStatus: () => Promise<HandoffStatus>
   copyHandoff: (issue: IssueDetail) => Promise<void>
   onEstimates?: (callback: () => void) => () => void
@@ -167,6 +172,7 @@ declare global {
   }
 }
 import type { EmailSettings, EmailSettingsInput, EmailStatus } from './email'
+import type { MonitoringSettings, MonitoringSettingsInput, MonitoringStatus } from './monitoring'
 import type { HandoffStatus } from './handoff'
 import type { ProjectNotificationPreferences } from './activity'
 import type { ProjectMetricSnapshot } from './metrics'

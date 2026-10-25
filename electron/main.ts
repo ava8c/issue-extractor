@@ -19,6 +19,9 @@ import { IssueCache } from './issue-cache'
 import { ActivityService } from './activity'
 import { AIConfig, validateAISettings } from './ai-config'
 import { EstimateService } from './estimates'
+import { MonitoringConfig } from './monitoring-config'
+import { MonitoringService, monitoringPayload, verifyMonitoring } from './monitoring'
+import { emptyMonitoringStatus, type MonitoringSettingsInput } from '../src/shared/monitoring'
 import { OpenAIClient } from './openai'
 import type { AISettingsInput, ProjectEstimateSettings } from '../src/shared/estimates'
 import type { ProjectNotificationPreferences } from '../src/shared/activity'
@@ -52,6 +55,8 @@ let issueCache: Promise<IssueCache> | undefined
 let activityService: ActivityService | undefined
 let aiConfig: AIConfig
 let estimateService: Promise<EstimateService> | undefined
+let monitoringConfig: MonitoringConfig
+let monitoringService: Promise<MonitoringService> | undefined
 let emailConfig: EmailConfig
 let emailDispatcher: EmailDispatcher | undefined
 let handoffStatus: HandoffStatus = disabledHandoff
@@ -111,6 +116,14 @@ async function cache() {
   return issueCache
 }
 async function resetConnection() {
+  if (monitoringService) await (await monitoringService).clear()
+  else
+    await unlink(join(app.getPath('userData'), 'monitoring-outbox.json')).catch(
+      (error: NodeJS.ErrnoException) => {
+        if (error.code !== 'ENOENT') throw error
+      },
+    )
+  monitoringService = undefined
   await handoffStore?.clear()
   if (estimateService) await (await estimateService).clear()
   else
@@ -140,6 +153,37 @@ async function activity() {
 }
 function estimatesChanged() {
   if (window && !window.isDestroyed()) window.webContents.send('estimates:changed')
+  void flushMonitoring().catch(() => {})
+}
+async function monitoring() {
+  if (!monitoringService)
+    monitoringService = (async () => {
+      const scope = createHash('sha256')
+        .update(`${config.host}\n${await getToken()}`)
+        .digest('hex')
+      const service = new MonitoringService(
+        join(app.getPath('userData'), 'monitoring-outbox.json'),
+        scope,
+        monitoringConfig,
+      )
+      await service.load()
+      return service
+    })()
+  return monitoringService
+}
+async function flushMonitoring() {
+  if (!monitoringConfig?.settings().enabled || !config.hasToken) return
+  const store = await monitoring()
+  if (!estimateService) await estimates()
+  if (estimateService) {
+    const projects = (await cache()).getWorkspace()?.workspace.projects ?? []
+    const payloads = (await estimateService).monitoringCandidates().flatMap((candidate) => {
+      const project = projects.find((project) => project.id === candidate.estimate.projectId)
+      return project ? [monitoringPayload(config.host, project, candidate)] : []
+    })
+    await store.sync(payloads)
+  }
+  await store.flush()
 }
 async function estimates() {
   if (!estimateService)
@@ -287,6 +331,55 @@ app
   .then(async () => {
     app.setAccessibilitySupportEnabled(true)
     await loadConfig()
+    monitoringConfig = new MonitoringConfig(join(app.getPath('userData'), 'monitoring.json'), {
+      encrypt: async (value) => {
+        if (!(await safeStorage.isAsyncEncryptionAvailable()))
+          throw new Error(
+            'Portachiavi non disponibile. La chiave Monitoraggio non verrà salvata in chiaro.',
+          )
+        return (await safeStorage.encryptStringAsync(value)).toString('base64')
+      },
+      decrypt: async (value) => {
+        try {
+          return (await safeStorage.decryptStringAsync(Buffer.from(value, 'base64'))).result
+        } catch {
+          throw new Error(
+            'Impossibile leggere la chiave Monitoraggio dal Portachiavi. Reinseriscila nelle impostazioni.',
+          )
+        }
+      },
+    })
+    await monitoringConfig
+      .load()
+      .catch((error) => dialog.showErrorBox('Monitoraggio non disponibile', error.message))
+    handle('monitoring:settings', () => monitoringConfig.settings())
+    handle('monitoring:save', async (input: MonitoringSettingsInput) => {
+      const result = await monitoringConfig.save(input)
+      // Load saved estimates too: a crash between estimate persistence and enqueue is recoverable.
+      if (config.hasToken && result.enabled) await estimates()
+      void flushMonitoring().catch(() => {})
+      return result
+    })
+    handle('monitoring:verify', (input: MonitoringSettingsInput) =>
+      verifyMonitoring(monitoringConfig, input),
+    )
+    handle('monitoring:status', async () =>
+      config.hasToken ? (await monitoring()).status() : emptyMonitoringStatus(),
+    )
+    handle('monitoring:retry', async () => {
+      if (!monitoringConfig.settings().enabled)
+        throw new Error('Attiva prima l’integrazione con Monitoraggio.')
+      await flushMonitoring()
+      await (await monitoring()).retry()
+    })
+    const monitoringTimer = setInterval(() => {
+      void flushMonitoring().catch(() => {})
+    }, 60_000)
+    monitoringTimer.unref()
+    app.on('before-quit', () => {
+      clearInterval(monitoringTimer)
+      void monitoringService?.then((service) => service.stop())
+    })
     aiConfig = new AIConfig(join(app.getPath('userData'), 'openai.json'), {
       encrypt: async (value) => {
         if (!(await safeStorage.isAsyncEncryptionAvailable()))

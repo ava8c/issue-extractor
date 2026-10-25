@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { readFile, writeFile, rename, unlink } from 'node:fs/promises'
 import type { Issue, IssueLocation } from '../src/shared/types'
+import type { MonitoringIssue } from '../src/shared/monitoring'
 import {
   defaultProjectEstimates,
   estimateEligible,
@@ -37,6 +38,7 @@ interface Source {
 }
 interface SavedEstimate {
   value: IssueEstimate
+  issue?: MonitoringIssue
   signature?: string
   sources?: { id: string; hash: string }[]
   updatedAt?: string
@@ -192,6 +194,14 @@ export class EstimateService {
       ...(this.projects[projectId] ?? defaultProjectEstimates()),
       statuses: [...(this.projects[projectId]?.statuses ?? [])],
     }
+  }
+  monitoringCandidates() {
+    return Object.entries(this.records).flatMap(([key, record]) => {
+      const issue = record.issue ?? this.locations.get(key)?.issue
+      return issue && ['ready', 'review', 'none'].includes(record.value.state)
+        ? [{ issue, estimate: record.value }]
+        : []
+    })
   }
   async saveSettings(projectId: string, value: ProjectEstimateSettings) {
     if (this.stopped || typeof projectId !== 'string' || !projectId)
@@ -423,6 +433,15 @@ export class EstimateService {
         if (!current()) return
         const normalized = normalizeTotals(result)
         this.records[key] = {
+          issue: {
+            id: issue.id,
+            number: issue.number,
+            title: issue.title,
+            url: issue.url,
+            repository: issue.repository,
+            status: issue.status,
+            kind: issue.kind,
+          },
           value: {
             ...normalized,
             issueId: issue.id,

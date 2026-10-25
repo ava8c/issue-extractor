@@ -2,6 +2,11 @@ import { contextBridge, ipcRenderer } from 'electron'
 import type { AtlasAPI } from '../src/shared/types'
 
 const api: AtlasAPI = {
+  monitoringSettings: () => ipcRenderer.invoke('monitoring:settings'),
+  saveMonitoringSettings: (input) => ipcRenderer.invoke('monitoring:save', input),
+  verifyMonitoring: (input) => ipcRenderer.invoke('monitoring:verify', input),
+  monitoringStatus: () => ipcRenderer.invoke('monitoring:status'),
+  retryMonitoring: () => ipcRenderer.invoke('monitoring:retry'),
   handoffStatus: () => ipcRenderer.invoke('handoff:status'),
   copyHandoff: (issue) => ipcRenderer.invoke('handoff:copy', issue),
   onEstimates: (callback) => {

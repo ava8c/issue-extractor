@@ -81,6 +81,7 @@ import { ProjectNotificationSettings } from './components/ProjectNotificationSet
 import { useActivity } from './useActivity'
 import { EmailSettingsPanel } from './components/EmailSettings'
 import { AISettingsPanel, ProjectEstimateSettingsModal } from './components/EstimateSettings'
+import { MonitoringSettingsPanel } from './components/MonitoringSettings'
 import { EstimateBadge, IssueEstimatePanel } from './components/IssueEstimate'
 import { useEstimates } from './useEstimates'
 import type { IssueEstimate } from './shared/estimates'
@@ -152,7 +153,7 @@ function SettingsModal({
   onAISaved: () => void
 }) {
   const [host, setHost] = useState(initial.host)
-  const [settingsTab, setSettingsTab] = useState<'github' | 'email' | 'ai'>('github')
+  const [settingsTab, setSettingsTab] = useState<'github' | 'email' | 'ai' | 'monitoring'>('github')
   const [token, setToken] = useState('')
   const [organizations, setOrganizations] = useState(initial.organizations.join(', '))
   const [urls, setUrls] = useState(initial.projectUrls.join('\n'))
@@ -238,14 +239,18 @@ function SettingsModal({
             ? 'Il tuo GitHub, connesso.'
             : settingsTab === 'ai'
               ? 'Le stime, sempre visibili.'
-              : 'Ricevi notifiche via mail.'}
+              : settingsTab === 'monitoring'
+                ? 'Le stime, nei tuoi rapportini.'
+                : 'Ricevi notifiche via mail.'}
         </h2>
         <p className="modal-description">
           {settingsTab === 'github'
             ? 'Collega la tua istanza Enterprise. I tuoi progetti e le tue issue, in un unico workspace.'
             : settingsTab === 'ai'
               ? 'Scegli modello e limiti, poi abilita i singoli progetti.'
-              : 'I cambiamenti delle tue issue, direttamente nella tua casella.'}
+              : settingsTab === 'monitoring'
+                ? 'Collega Monitoraggio e prepara le attività da pianificare.'
+                : 'I cambiamenti delle tue issue, direttamente nella tua casella.'}
         </p>
         <div className="settings-tabs" role="tablist" aria-label="Sezione impostazioni">
           <button
@@ -275,8 +280,19 @@ function SettingsModal({
           >
             OpenAI e stime
           </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={settingsTab === 'monitoring'}
+            disabled={saving || testing}
+            onClick={() => setSettingsTab('monitoring')}
+          >
+            Monitoraggio
+          </button>
         </div>
-        {settingsTab === 'ai' ? (
+        {settingsTab === 'monitoring' ? (
+          <MonitoringSettingsPanel api={api} onBusy={setSaving} />
+        ) : settingsTab === 'ai' ? (
           <AISettingsPanel api={api} onBusy={setSaving} saved={onAISaved} />
         ) : settingsTab === 'email' ? (
           <EmailSettingsPanel api={api} onBusy={setSaving} />

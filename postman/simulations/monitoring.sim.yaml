@@ -1,0 +1,5 @@
+simulation: issue-atlas-monitoring
+routing: path
+mocks:
+  - routeKey: monitoring
+    path: ../mocks/monitoring/monitoring.js

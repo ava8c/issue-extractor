@@ -24,6 +24,12 @@ L’app scopre i progetti personali e quelli delle organizzazioni visibili al to
 
 Projects v2 viene letto via GraphQL (`/api/graphql` su Enterprise Server, `https://api.github.com/graphql` su github.com). La compatibilità effettiva dipende dalla versione e dallo schema della tua istanza Enterprise. Non vengono effettuate mutazioni su GitHub.
 
+## Integrazione con Monitoraggio
+
+In **Impostazioni → Monitoraggio** puoi configurare URL base HTTPS e chiave API dedicata. All’attivazione vengono inviate le stime disponibili e poi i loro aggiornamenti; una coda locale conserva gli invii e ritenta gli errori con l’app aperta. La chiave è cifrata nel Portachiavi e va reinserita cambiando URL.
+
+Le issue arrivano in **Rapportini → Issue in attesa** di Monitoraggio: da lì scegli manualmente mese, risorsa, area, progetto e tipo attività. I mapping si salvano in Monitoraggio. Gli invii non modificano i rapportini esistenti. Per attivare l’API sul server segui la [guida di integrazione](docs/monitoring.md); il [contratto OpenAPI](docs/monitoring-api.openapi.json) è generato dai modelli Python di Monitoraggio.
+
 ## Navigazione
 
 - Progetti, preferiti e vista **Tutte le issue**, con deduplicazione delle issue presenti in più progetti.

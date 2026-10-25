@@ -1,0 +1,307 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Monitoraggio — Issue Atlas Inbox",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "https://monitoraggio.example"
+    }
+  ],
+  "security": [
+    {
+      "AtlasKey": []
+    }
+  ],
+  "paths": {
+    "/api/v1/integration": {
+      "get": {
+        "operationId": "verifyIntegration",
+        "summary": "Verify the dedicated ingestion key",
+        "responses": {
+          "200": {
+            "description": "Authenticated; JSON version=1, status=ok"
+          },
+          "400": {
+            "description": "HTTPS required"
+          },
+          "401": {
+            "description": "Invalid or revoked API key"
+          },
+          "408": {
+            "description": "Body read timeout"
+          },
+          "409": {
+            "description": "Conflicting revision"
+          },
+          "413": {
+            "description": "Body exceeds 64 KiB"
+          },
+          "415": {
+            "description": "JSON without compression required"
+          },
+          "422": {
+            "description": "Invalid payload; values are not echoed"
+          },
+          "429": {
+            "description": "Rate limit; Retry-After: 60"
+          }
+        }
+      }
+    },
+    "/api/v1/estimate-inbox": {
+      "post": {
+        "operationId": "receiveEstimate",
+        "summary": "Upsert into staging, without creating or changing activities",
+        "description": "Identity is integration + GitHub host + project ID + issue ID. checked_at must include a timezone and orders revisions. Exact retries are duplicate; older revisions are stale; conflicting content at the same timestamp is 409. New content reopens a handled item. state=none withdraws the estimate. At most 120 requests/key/minute. No read or promotion API is exposed.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Durably staged, duplicate or stale",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["version", "status", "id"],
+                  "properties": {
+                    "version": {
+                      "const": 1
+                    },
+                    "status": {
+                      "enum": ["received", "duplicate", "stale"]
+                    },
+                    "id": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "HTTPS required"
+          },
+          "401": {
+            "description": "Invalid or revoked API key"
+          },
+          "408": {
+            "description": "Body read timeout"
+          },
+          "409": {
+            "description": "Conflicting revision"
+          },
+          "413": {
+            "description": "Body exceeds 64 KiB"
+          },
+          "415": {
+            "description": "JSON without compression required"
+          },
+          "422": {
+            "description": "Invalid payload; values are not echoed"
+          },
+          "429": {
+            "description": "Rate limit; Retry-After: 60"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "AtlasKey": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "iat_<integration-id>.<256-bit-secret>; generated/rotated/revoked by a Monitoraggio admin"
+      }
+    },
+    "schemas": {
+      "Entry": {
+        "additionalProperties": false,
+        "properties": {
+          "source_id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Source Id",
+            "type": "string"
+          },
+          "amount": {
+            "maximum": 1000000,
+            "minimum": 0,
+            "title": "Amount",
+            "type": "number"
+          },
+          "unit": {
+            "enum": ["hours", "days"],
+            "title": "Unit",
+            "type": "string"
+          },
+          "label": {
+            "maxLength": 150,
+            "title": "Label",
+            "type": "string"
+          },
+          "excerpt": {
+            "maxLength": 240,
+            "minLength": 1,
+            "title": "Excerpt",
+            "type": "string"
+          }
+        },
+        "required": ["source_id", "amount", "unit", "label", "excerpt"],
+        "title": "Entry",
+        "type": "object"
+      },
+      "Estimate": {
+        "additionalProperties": false,
+        "properties": {
+          "state": {
+            "enum": ["ready", "review", "none"],
+            "title": "State",
+            "type": "string"
+          },
+          "total_hours": {
+            "maximum": 2400000000,
+            "minimum": 0,
+            "title": "Total Hours",
+            "type": "number"
+          },
+          "hours_per_day": {
+            "exclusiveMinimum": 0,
+            "maximum": 24,
+            "title": "Hours Per Day",
+            "type": "number"
+          },
+          "note": {
+            "maxLength": 500,
+            "title": "Note",
+            "type": "string"
+          },
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/Entry"
+            },
+            "maxItems": 100,
+            "title": "Entries",
+            "type": "array"
+          }
+        },
+        "required": ["state", "total_hours", "hours_per_day", "note", "entries"],
+        "title": "Estimate",
+        "type": "object"
+      },
+      "Issue": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "number": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "title": "Number",
+            "type": "integer"
+          },
+          "title": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          },
+          "url": {
+            "maxLength": 2000,
+            "title": "Url",
+            "type": "string"
+          },
+          "repository": {
+            "maxLength": 500,
+            "title": "Repository",
+            "type": "string"
+          },
+          "status": {
+            "maxLength": 500,
+            "title": "Status",
+            "type": "string"
+          },
+          "kind": {
+            "enum": ["issue", "draft", "pull-request"],
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": ["id", "number", "title", "url", "repository", "status", "kind"],
+        "title": "Issue",
+        "type": "object"
+      },
+      "Project": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          },
+          "url": {
+            "maxLength": 2000,
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": ["id", "title", "url"],
+        "title": "Project",
+        "type": "object"
+      },
+      "Payload": {
+        "additionalProperties": false,
+        "properties": {
+          "version": {
+            "const": 1,
+            "title": "Version",
+            "type": "integer"
+          },
+          "github_host": {
+            "maxLength": 2000,
+            "title": "Github Host",
+            "type": "string"
+          },
+          "project": {
+            "$ref": "#/components/schemas/Project"
+          },
+          "issue": {
+            "$ref": "#/components/schemas/Issue"
+          },
+          "estimate": {
+            "$ref": "#/components/schemas/Estimate"
+          },
+          "checked_at": {
+            "maxLength": 40,
+            "title": "Checked At",
+            "type": "string"
+          }
+        },
+        "required": ["version", "github_host", "project", "issue", "estimate", "checked_at"],
+        "title": "Payload",
+        "type": "object"
+      }
+    }
+  }
+}
