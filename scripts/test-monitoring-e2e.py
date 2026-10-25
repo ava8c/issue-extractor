@@ -48,18 +48,19 @@ with tempfile.TemporaryDirectory(prefix="atlas-monitoring-e2e-") as directory:
             rows = list_inbox()
             assert len(rows) == 1 and rows[0]["payload"]["estimate"]["total_hours"] == 20
             conn = get_db()
-            assert conn.execute("SELECT COUNT(*) FROM attivita").fetchone()[0] == 0
-            project = conn.execute("SELECT id, area_id FROM domini_progetti LIMIT 1").fetchone()
+            assert conn.execute("SELECT COUNT(*) FROM rapp_issues").fetchone()[0] == 0
+            project = conn.execute("SELECT p.id FROM domini_progetti p JOIN domini_aree a ON a.id = p.area_id WHERE a.nome = 'AM' LIMIT 1").fetchone()
             user = conn.execute("SELECT id FROM users LIMIT 1").fetchone()[0]
-            resource = conn.execute("SELECT id FROM domini_risorse LIMIT 1").fetchone()[0]
-            activity_type = conn.execute("SELECT id FROM domini_attivita LIMIT 1").fetchone()[0]
+            conn.execute("INSERT INTO rapp_applicativi (progetto_id, anno) VALUES (?, 2026)", (project["id"],))
+            conn.commit()
             conn.close()
-            activity = promote(rows[0]["id"], rows[0]["fingerprint"], user_id=user, mese="2026-11", risorsa_id=resource, area_id=project["area_id"], progetto_id=project["id"], attivita_id=activity_type, stima_efficienza=20)
+            inserted = promote(rows[0]["id"], rows[0]["fingerprint"], user_id=user, mese="2026-11", progetto_id=project["id"])
             conn = get_db()
-            assert conn.execute("SELECT mese, stima FROM attivita WHERE id = ?", (activity,)).fetchone()[:] == ("2026-11", 20)
-            assert conn.execute("SELECT COUNT(*) FROM ore_giornaliere WHERE attivita_id = ?", (activity,)).fetchone()[0] == 21
+            assert conn.execute("SELECT mese, stima_ore FROM rapp_issues WHERE id = ?", (inserted,)).fetchone()[:] == ("Novembre", 20)
+            assert conn.execute("SELECT COUNT(*) FROM attivita").fetchone()[0] == 0
+            assert conn.execute("SELECT COUNT(*) FROM ore_giornaliere").fetchone()[0] == 0
             conn.close()
-            print("E2E passed: real TS client -> API -> isolated inbox -> manual November promotion and daily hours")
+            print("E2E passed: real TS client -> API -> isolated inbox -> manual November Rapportini AM issue; activities and daily hours untouched")
         finally:
             server.terminate()
             server.wait(timeout=10)

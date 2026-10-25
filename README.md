@@ -28,7 +28,7 @@ Projects v2 viene letto via GraphQL (`/api/graphql` su Enterprise Server, `https
 
 In **Impostazioni → Monitoraggio** puoi configurare URL base HTTPS e chiave API dedicata. All’attivazione vengono inviate le stime disponibili e poi i loro aggiornamenti; una coda locale conserva gli invii e ritenta gli errori con l’app aperta. La chiave è cifrata nel Portachiavi e va reinserita cambiando URL.
 
-Le issue arrivano in **Rapportini → Issue in attesa** di Monitoraggio: da lì scegli manualmente mese, risorsa, area, progetto e tipo attività. I mapping si salvano in Monitoraggio. Gli invii non modificano i rapportini esistenti. Per attivare l’API sul server segui la [guida di integrazione](docs/monitoring.md); il [contratto OpenAPI](docs/monitoring-api.openapi.json) è generato dai modelli Python di Monitoraggio.
+Le issue arrivano in **Rapportini → Issue in attesa** di Monitoraggio: da lì scegli manualmente applicativo e mese. Il mapping fra progetti GitHub e applicativi AM si salva in Monitoraggio. Gli invii non modificano i rapportini esistenti. Per attivare l’API sul server segui la [guida di integrazione](docs/monitoring.md); il [contratto OpenAPI](docs/monitoring-api.openapi.json) è generato dai modelli Python di Monitoraggio.
 
 ## Navigazione
 

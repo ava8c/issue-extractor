@@ -53,7 +53,7 @@
     "/api/v1/estimate-inbox": {
       "post": {
         "operationId": "receiveEstimate",
-        "summary": "Upsert into staging, without creating or changing activities",
+        "summary": "Upsert into staging, without creating rapportini issues or activities",
         "description": "Identity is integration + GitHub host + project ID + issue ID. checked_at must include a timezone and orders revisions. Exact retries are duplicate; older revisions are stale; conflicting content at the same timestamp is 409. New content reopens a handled item. state=none withdraws the estimate. At most 120 requests/key/minute. No read or promotion API is exposed.",
         "requestBody": {
           "required": true,
