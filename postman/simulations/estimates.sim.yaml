@@ -1,0 +1,7 @@
+simulation: issue-estimates
+routing: path
+mocks:
+  - routeKey: github
+    path: ../mocks/github/default.js
+  - routeKey: openai
+    path: ../mocks/openai/responses.js

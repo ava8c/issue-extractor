@@ -1,0 +1,134 @@
+.settings-tabs {
+  display: flex;
+  gap: 6px;
+  padding: 4px;
+  margin: 0 0 22px;
+  border: 1px solid #e6e0ef;
+  border-radius: 8px;
+  background: #f7f4fb;
+}
+.settings-tabs button {
+  flex: 1;
+  padding: 9px 12px;
+  border: none;
+  border-radius: 5px;
+  background: none;
+  color: #a394b4;
+  font-size: 12px;
+  cursor: pointer;
+}
+.settings-tabs button[aria-selected='true'] {
+  color: #795b9b;
+  background: white;
+  box-shadow: 0 1px 4px #5f43731a;
+}
+.settings-tabs button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.email-settings fieldset {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+.settings-modal .email-toggle {
+  display: flex;
+  justify-content: flex-start;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 15px;
+  border: 1px solid #e8e0f0;
+  border-radius: 9px;
+  background: #f7f2fc;
+  margin: 0 0 12px;
+}
+.settings-modal .email-toggle input {
+  margin: 3px 0 0;
+  width: 15px;
+  height: 15px;
+  accent-color: #9d7dbe;
+}
+.email-toggle span {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.email-toggle strong {
+  font-size: 13px;
+  font-weight: 500;
+  color: #7e6497;
+}
+.email-toggle small {
+  font-size: 11px;
+  color: #a18eaf;
+  font-weight: 400;
+}
+.email-settings-row {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 14px;
+}
+.email-settings-row > div {
+  min-width: 0;
+}
+.email-settings select {
+  width: 100%;
+  height: 38px;
+  background: white;
+  border: 1px solid #e4ddec;
+  border-radius: 7px;
+  color: #857293;
+  padding: 7px 10px;
+  font-size: 12px;
+}
+.email-settings .email-test-actions {
+  display: flex;
+  gap: 10px;
+  margin: 18px 0 10px;
+}
+.email-test-actions .button {
+  font-size: 11px;
+  padding: 9px 12px;
+}
+.email-save-hint {
+  font-size: 10px;
+  color: #a394af;
+  max-width: 165px;
+  line-height: 1.6;
+}
+.email-delivery-status {
+  border-top: 1px solid #ede6f3;
+  margin: 22px 0 0;
+  padding-top: 17px;
+}
+.email-delivery-status h3 {
+  font-size: 12px;
+  font-weight: 500;
+  color: #8e779f;
+  margin: 0 0 10px;
+}
+.email-delivery-status p {
+  font-size: 11px;
+  color: #a192ae;
+  line-height: 1.8;
+  margin: 6px 0;
+}
+.email-delivery-status .email-delivery-error {
+  color: #ad8a59;
+  background: #fcf6e9;
+  padding: 10px;
+  border-radius: 6px;
+}
+.email-delivery-status .button {
+  margin-top: 9px;
+  font-size: 11px;
+}
+.email-loading {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 36px 0;
+  color: #a18eaf;
+  font-size: 12px;
+}

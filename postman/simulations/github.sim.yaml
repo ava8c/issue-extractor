@@ -1,0 +1,5 @@
+simulation: github-enterprise
+routing: path
+mocks:
+  - routeKey: github
+    path: ../mocks/github/default.js

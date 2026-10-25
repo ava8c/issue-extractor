@@ -1,0 +1,87 @@
+{
+  "name": "issue-extractor",
+  "productName": "Issue Atlas",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A focused GitHub Enterprise issue workspace, built for macOS.",
+  "type": "module",
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:web": "vite --host 127.0.0.1",
+    "build": "npm run typecheck && vite build && node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test tests/*.test.ts tests/*.test.tsx",
+    "test:simulation": "GITHUB_SIMULATION_URL=http://127.0.0.1:4900/github npm test",
+    "test:email": "SMTP_INTEGRATION=1 node --import tsx --test tests/email*.test.ts",
+    "test:electron-network": "node scripts/test-network.mjs",
+    "format": "prettier --write src electron scripts tests vite.config.ts index.html package.json README.md",
+    "start": "electron .",
+    "pack": "npm run build && node scripts/icon.mjs && electron-builder --mac dir",
+    "dist": "npm run build && node scripts/icon.mjs && electron-builder --mac dmg zip"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "fflate": "^0.8.2",
+    "lucide-react": "^0.468.0",
+    "nodemailer": "^10.2.1",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-markdown": "^10.1.0",
+    "rehype-raw": "^7.0.0",
+    "rehype-sanitize": "^6.0.0",
+    "rehype-stringify": "^10.0.1",
+    "remark-gfm": "^4.0.1",
+    "remark-parse": "^11.0.0",
+    "remark-rehype": "^11.1.2",
+    "tldts": "^7.4.19",
+    "unified": "^11.0.5",
+    "unist-util-visit": "^5.0.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/mailparser": "^3.9.0",
+    "@types/node": "^22.10.0",
+    "@types/nodemailer": "^8.0.2",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@types/smtp-server": "^3.5.13",
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^43.0.0",
+    "electron-builder": "^26.0.12",
+    "esbuild": "^0.25.0",
+    "graphql": "^17.0.2",
+    "mailparser": "^3.12.4",
+    "prettier": "^3.9.10",
+    "sharp": "^0.35.5",
+    "smtp-server": "^3.21.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vite": "^6.1.0"
+  },
+  "build": {
+    "appId": "it.issueatlas.desktop",
+    "productName": "Issue Atlas",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**",
+      "dist-electron/**",
+      "package.json"
+    ],
+    "asar": true,
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "icon": "build/icon.icns",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "darkModeSupport": true
+    },
+    "dmg": {
+      "title": "Issue Atlas"
+    }
+  }
+}
