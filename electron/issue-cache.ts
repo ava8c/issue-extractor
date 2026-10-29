@@ -15,6 +15,8 @@ import {
   findIssueLocations,
   NOTIFICATION_LIMIT,
   notificationsEnabled,
+  isOwnNotification,
+  readNotificationLogin,
   readNotificationPreferences,
   type ProjectNotificationPreferences,
 } from '../src/shared/activity'
@@ -37,6 +39,7 @@ interface CacheFile {
   notifications?: IssueNotification[]
   emailJobs?: EmailJob[]
   notificationPreferences?: Record<string, ProjectNotificationPreferences>
+  notificationLogin?: string
   layouts?: Record<string, ProjectLayout>
 }
 
@@ -54,6 +57,7 @@ export class IssueCache {
   private emailTarget: EmailTarget | null = null
   private emailJobs: EmailJob[] = []
   private projectNotifications: Record<string, ProjectNotificationPreferences> = {}
+  private notificationLogin = ''
 
   constructor(
     private path: string,
@@ -64,6 +68,7 @@ export class IssueCache {
     try {
       const file = JSON.parse(await readFile(this.path, 'utf8')) as CacheFile
       if (file.version !== 1 || file.scope !== this.scope) return
+      this.notificationLogin = readNotificationLogin(file.notificationLogin)
       for (const [id, layout] of Object.entries(file.layouts ?? {}))
         if (Array.isArray(layout?.statuses) && typeof layout.statusFieldName === 'string')
           this.layouts.set(id, layout)
@@ -78,7 +83,7 @@ export class IssueCache {
                     ...job,
                     state: 'uncertain' as const,
                     error:
-                      'Invio interrotto: esito SMTP non confermato. Verifica la casella prima di riprovare.',
+                      'Invio interrotto: esito dell’invio non confermato. Verifica Grok prima di riprovare.',
                   }
                 : job,
             )
@@ -135,6 +140,41 @@ export class IssueCache {
     return [...issues.values()]
   }
 
+  available(projectId: string, statuses?: string[]): CachedProject | null {
+    const exact = this.get(projectId, statuses)
+    if (exact) return exact
+    const snapshots = [...this.snapshots.values()].filter(
+      (snapshot) => snapshot.projectId === projectId,
+    )
+    const activity = this.activity[projectId]
+    if (!snapshots.length && !activity) return null
+    let issues = new Map<string, Issue>()
+    for (const snapshot of [...snapshots, ...(activity ? [activity] : [])].sort(
+      (a, b) => a.syncedAt - b.syncedAt,
+    )) {
+      if (snapshot === activity) {
+        // The activity index is complete, but it does not fetch labels.
+        issues = new Map(
+          snapshot.issues.map((issue) => [
+            issue.id,
+            {
+              ...issue,
+              labels: issues.get(issue.id)?.labels ?? issue.labels,
+            },
+          ]),
+        )
+      } else {
+        for (const issue of snapshot.issues) issues.set(issue.id, issue)
+      }
+    }
+    return {
+      issues: [...issues.values()].filter((issue) => !statuses || statuses.includes(issue.status)),
+      // A union of filtered lists is partial: always refresh it when GitHub is available.
+      syncedAt: 0,
+      layout: this.getLayout(projectId),
+    }
+  }
+
   setLayout(projectId: string, layout: ProjectLayout) {
     this.layouts.set(projectId, layout)
   }
@@ -187,7 +227,25 @@ export class IssueCache {
     return readNotificationPreferences(this.projectNotifications[projectId])
   }
 
-  async setNotificationPreferences(projectId: string, value: ProjectNotificationPreferences) {
+  getNotificationLogin(): string {
+    return this.notificationLogin
+  }
+
+  async setNotificationLogin(login: string) {
+    if (this.disposed) throw new Error('La connessione è cambiata. Riapri le impostazioni.')
+    const normalized = readNotificationLogin(login)
+    if (this.notificationLogin === normalized) return
+    this.notificationLogin = normalized
+    this.notificationItems = this.notificationItems.map((item) =>
+      isOwnNotification(item, this.notificationLogin) ? { ...item, read: true } : item,
+    )
+    await this.persist(true)
+  }
+
+  async setNotificationPreferences(
+    projectId: string,
+    value: Partial<ProjectNotificationPreferences>,
+  ) {
     if (this.disposed) throw new Error('La connessione è cambiata. Riapri le preferenze notifiche.')
     if (typeof projectId !== 'string' || !projectId.length) throw new Error('Progetto non valido.')
     const preferences = readNotificationPreferences(value)
@@ -214,14 +272,20 @@ export class IssueCache {
         job.state = 'cancelled'
   }
 
-  async recordActivity(projectId: string, issues: Issue[], now = Date.now()) {
-    if (this.disposed) return
-    const events = detectActivity(projectId, this.activity[projectId]?.issues, issues, now)
+  async recordActivity(
+    projectId: string,
+    issues: Issue[],
+    now = Date.now(),
+    events = detectActivity(projectId, this.activity[projectId]?.issues, issues, now),
+  ) {
+    if (this.disposed) return []
     const known = new Set(this.notificationItems.map((notification) => notification.id))
     const preferences = this.getNotificationPreferences(projectId)
-    const fresh = events.filter(
-      (event) => !known.has(event.id) && notificationsEnabled(event.issue, preferences),
-    )
+    const fresh = events
+      .filter((event) => !known.has(event.id) && notificationsEnabled(event.issue, preferences))
+      .map((event) =>
+        isOwnNotification(event, this.notificationLogin) ? { ...event, read: true } : event,
+      )
     this.notificationItems = [...fresh, ...this.notificationItems]
       .sort((a, b) => b.createdAt - a.createdAt || a.id.localeCompare(b.id))
       .slice(0, NOTIFICATION_LIMIT)
@@ -249,6 +313,15 @@ export class IssueCache {
             })
         }
     await this.persist(!!this.emailTarget && fresh.length > 0)
+    // Preferences or the connection may have changed while the write was pending.
+    const accepted = new Set(fresh.map((event) => event.id))
+    return this.disposed
+      ? []
+      : this.notificationItems.filter(
+          (event) =>
+            accepted.has(event.id) &&
+            notificationsEnabled(event.issue, this.getNotificationPreferences(projectId)),
+        )
   }
 
   async configureEmail(target: EmailTarget | null) {
@@ -309,6 +382,13 @@ export class IssueCache {
       this.emailJobs = this.emailJobs.filter((entry) => !evict.has(entry.id))
     }
     await this.persist(true)
+  }
+
+  deliveryHistory() {
+    return this.emailJobs
+      .slice(-100)
+      .reverse()
+      .map((job) => ({ ...job }))
   }
 
   emailStatus(revision: string) {
@@ -387,6 +467,7 @@ export class IssueCache {
           notifications: this.notificationItems,
           emailJobs: this.emailJobs,
           notificationPreferences: this.projectNotifications,
+          notificationLogin: this.notificationLogin,
           layouts: Object.fromEntries(this.layouts),
         })
         await writeFile(`${this.path}.tmp`, contents, { mode: 0o600 })
@@ -408,6 +489,7 @@ export class IssueCache {
     this.emailJobs = []
     this.emailTarget = null
     this.projectNotifications = {}
+    this.notificationLogin = ''
     await this.pending.catch(() => {})
     await Promise.all(
       [this.path, `${this.path}.tmp`].map((path) =>

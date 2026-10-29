@@ -1,5 +1,10 @@
-import type { ActivitySyncResult, IssueSearchResult, Project } from '../src/shared/types'
-import { ACTIVITY_INTERVAL } from '../src/shared/activity'
+import type {
+  ActivitySyncResult,
+  IssueNotification,
+  IssueSearchResult,
+  Project,
+} from '../src/shared/types'
+import { ACTIVITY_INTERVAL, detectActivity, notificationsEnabled } from '../src/shared/activity'
 import { limitConcurrency, mapConcurrent } from '../src/shared/loading'
 import { GitHubClient } from './github'
 import { IssueCache } from './issue-cache'
@@ -12,6 +17,7 @@ export class ActivityService {
     private github: GitHubClient,
     private cache: IssueCache,
     private afterSync?: () => void,
+    private onNotifications?: (items: IssueNotification[]) => void,
   ) {}
 
   async sync(projects: Project[], force = false): Promise<ActivitySyncResult> {
@@ -33,10 +39,37 @@ export class ActivityService {
     const pending = this.requests.get(projectId)
     if (pending) return pending
     const request = this.run(async () => {
+      const now = Date.now()
       const layout = this.cache.getLayout(projectId) ?? (await this.github.projectLayout(projectId))
       this.cache.setLayout(projectId, layout)
       const issues = await this.github.activityItems(projectId, layout.statusFieldName)
-      await this.cache.recordActivity(projectId, issues)
+      const since = this.cache.activityTimestamp(projectId)
+      const previous = since ? this.cache.activityIssues(projectId) : undefined
+      const events = detectActivity(projectId, previous, issues, now)
+      try {
+        await this.cache.setNotificationLogin(await this.github.authenticatedLogin())
+      } catch {
+        // Identity lookup must not block recording events or their delivery.
+      }
+      if (this.cache.getNotificationLogin()) {
+        const old = new Map(previous?.map((issue) => [issue.id, issue]))
+        const preferences = this.cache.getNotificationPreferences(projectId)
+        await mapConcurrent(events, 2, async (event) => {
+          if (event.type === 'new-issue' || !notificationsEnabled(event.issue, preferences)) return
+          try {
+            event.actors = await this.github.notificationActors(
+              event,
+              old.get(event.issue.id),
+              since,
+            )
+          } catch {
+            // Unknown authors (including older Enterprise schemas) must remain unread.
+            event.actors = [null]
+          }
+        })
+      }
+      const fresh = await this.cache.recordActivity(projectId, issues, now, events)
+      this.onNotifications?.(fresh)
     })
     this.requests.set(projectId, request)
     try {

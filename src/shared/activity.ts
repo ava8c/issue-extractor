@@ -3,7 +3,22 @@ import type { Issue, IssueLocation, IssueNotification, NotificationType } from '
 export const ACTIVITY_INTERVAL = 2 * 60_000
 export const NOTIFICATION_LIMIT = 500
 
+export function readNotificationLogin(value: unknown): string {
+  return typeof value === 'string' ? value.trim().toLowerCase() : ''
+}
+
+export function isOwnNotification(notification: IssueNotification, login: string): boolean {
+  const identity = readNotificationLogin(login)
+  return (
+    !!identity &&
+    Array.isArray(notification.actors) &&
+    notification.actors.length > 0 &&
+    notification.actors.every((actor) => !!actor && identity === readNotificationLogin(actor.login))
+  )
+}
+
 export interface ProjectNotificationPreferences {
+  enabled: boolean
   excludedStatuses: string[]
   includeDrafts: boolean
 }
@@ -11,6 +26,7 @@ export interface ProjectNotificationPreferences {
 export function readNotificationPreferences(value?: unknown): ProjectNotificationPreferences {
   const entry = value as Partial<ProjectNotificationPreferences> | null | undefined
   return {
+    enabled: entry?.enabled !== false,
     excludedStatuses: Array.isArray(entry?.excludedStatuses)
       ? [
           ...new Set(
@@ -27,6 +43,7 @@ export function notificationsEnabled(
   preferences: ProjectNotificationPreferences,
 ): boolean {
   return (
+    preferences.enabled &&
     !preferences.excludedStatuses.includes(issue.status) &&
     (preferences.includeDrafts || issue.kind !== 'draft')
   )
@@ -62,7 +79,7 @@ export function detectActivity(
       })
     }
     if (!before) {
-      add('new-issue')
+      add('new-issue', { actors: [issue.projectItemCreator ?? null] })
       continue
     }
     if (before.status !== issue.status || before.state !== issue.state)
@@ -82,9 +99,20 @@ export function findIssueLocations(
   indexes: Record<string, { issues: Issue[] }>,
 ): IssueLocation[] {
   if (!Number.isSafeInteger(number) || number <= 0) return []
-  return [...new Set(projectIds)].flatMap((projectId) =>
-    (indexes[projectId]?.issues ?? [])
-      .filter((issue) => issue.number === number && issue.kind !== 'draft')
-      .map((issue) => ({ projectId, issue })),
+  return sortIssueLocations(
+    [...new Set(projectIds)].flatMap((projectId) =>
+      (indexes[projectId]?.issues ?? [])
+        .filter((issue) => issue.number === number && issue.kind !== 'draft')
+        .map((issue) => ({ projectId, issue })),
+    ),
+  )
+}
+
+export function sortIssueLocations(matches: IssueLocation[]): IssueLocation[] {
+  const timestamp = (value: string) => Date.parse(value) || 0
+  return [...matches].sort(
+    (a, b) =>
+      timestamp(b.issue.createdAt) - timestamp(a.issue.createdAt) ||
+      timestamp(b.issue.updatedAt) - timestamp(a.issue.updatedAt),
   )
 }

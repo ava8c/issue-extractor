@@ -1,0 +1,5 @@
+simulation: grok-webhook
+routing: path
+mocks:
+  - routeKey: grok
+    path: ../mocks/grok/default.js

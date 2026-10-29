@@ -45,18 +45,50 @@ const api: AtlasAPI = {
   issue: (issue) => ipcRenderer.invoke('github:issue', issue),
   findIssues: (number, projectIds) => ipcRenderer.invoke('github:find-issues', number, projectIds),
   notifications: () => ipcRenderer.invoke('activity:get'),
+  onNotificationsChanged: (callback) => {
+    const listener = () => callback()
+    ipcRenderer.on('activity:changed', listener)
+    return () => ipcRenderer.removeListener('activity:changed', listener)
+  },
+  onNotificationOpen: (callback) => {
+    let active = true
+    let handling = false
+    const listener = () => {
+      if (handling) return
+      handling = true
+      void (async () => {
+        while (active) {
+          const item = await ipcRenderer.invoke('activity:pending-open')
+          if (!active || !item) return
+          callback({ projectId: item.projectId, issue: item.issue })
+          await ipcRenderer.invoke('activity:opened', item.id)
+        }
+      })()
+        .catch(() => {})
+        .finally(() => {
+          handling = false
+        })
+    }
+    ipcRenderer.on('activity:open', listener)
+    listener()
+    return () => {
+      active = false
+      ipcRenderer.removeListener('activity:open', listener)
+    }
+  },
   projectMetrics: (projectIds) => ipcRenderer.invoke('metrics:projects', projectIds),
   notificationPreferences: (projectId) => ipcRenderer.invoke('activity:preferences', projectId),
   saveNotificationPreferences: (projectId, preferences) =>
     ipcRenderer.invoke('activity:save-preferences', projectId, preferences),
   syncActivity: (projectIds, force) => ipcRenderer.invoke('activity:sync', projectIds, force),
   markNotificationsRead: (ids) => ipcRenderer.invoke('activity:read', ids),
-  emailSettings: () => ipcRenderer.invoke('email:settings'),
-  saveEmailSettings: (input) => ipcRenderer.invoke('email:save', input),
-  verifyEmail: (input) => ipcRenderer.invoke('email:verify', input),
-  testEmail: (input) => ipcRenderer.invoke('email:test', input),
-  emailStatus: () => ipcRenderer.invoke('email:status'),
-  retryEmail: (includeUncertain) => ipcRenderer.invoke('email:retry', includeUncertain),
+  grokHistory: () => ipcRenderer.invoke('grok:history'),
+  grokSettings: () => ipcRenderer.invoke('grok:settings'),
+  saveGrokSettings: (input) => ipcRenderer.invoke('grok:save', input),
+  verifyGrok: (input) => ipcRenderer.invoke('grok:verify', input),
+  testGrok: (input) => ipcRenderer.invoke('grok:test', input),
+  grokStatus: () => ipcRenderer.invoke('grok:status'),
+  retryGrok: (includeUncertain) => ipcRenderer.invoke('grok:retry', includeUncertain),
   asset: (url) => ipcRenderer.invoke('asset:get', url),
   copyImage: (url) => ipcRenderer.invoke('asset:copy', url),
   copyIssue: (issue) => ipcRenderer.invoke('export:copy', issue),

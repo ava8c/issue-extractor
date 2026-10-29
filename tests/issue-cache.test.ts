@@ -73,6 +73,32 @@ test('cache derives filtered views from a complete snapshot and uses newest meta
   await assert.rejects(readFile(join(folder, 'cache.json')), { code: 'ENOENT' })
 })
 
+test('offline navigation combines saved filters and activity without treating partial lists as synchronized', async (t) => {
+  const folder = await mkdtemp(join(tmpdir(), 'atlas-cache-offline-'))
+  t.after(() => rm(folder, { recursive: true, force: true }))
+  const path = join(folder, 'cache.json')
+  const cache = new IssueCache(path, 'connection')
+  cache.setLayout('P1', { statusFieldName: 'Stato', statuses: [{ id: 's1', name: 'Todo' }] })
+  await cache.save('P1', ['Todo'], [{ ...issue, labels: [{ name: 'bug', color: 'ff0000' }] }])
+  await cache.save('P1', ['Done'], [{ ...issue, id: 'I2', status: 'Done' }])
+  const restored = new IssueCache(path, 'connection')
+  await restored.load()
+  const partial = restored.available('P1')!
+  assert.deepEqual(partial.issues.map((item) => item.id).sort(), ['I1', 'I2'])
+  assert.equal(partial.syncedAt, 0)
+  assert.equal(partial.layout?.statusFieldName, 'Stato')
+  assert.deepEqual(restored.available('P1', ['Missing'])?.issues, [])
+  assert.deepEqual(restored.available('P1', [])?.issues, [])
+  assert.equal(restored.available('P2'), null)
+  assert.equal(restored.get('P1'), null, 'Partial fallback must not change exact cache semantics')
+  await restored.recordActivity('P1', [{ ...issue, status: 'Doing' }], Date.now() + 1000)
+  const updated = restored.available('P1')!
+  assert.equal(updated.issues.length, 1, 'A newer complete index removes obsolete issues')
+  assert.equal(updated.issues[0].status, 'Doing')
+  assert.equal(updated.issues[0].labels[0].name, 'bug')
+  assert.equal((await readFile(path, 'utf8')).includes('Private description'), false)
+})
+
 test('corrupt caches rebuild safely and failed writes keep the fetched list available in memory', async (t) => {
   const folder = await mkdtemp(join(tmpdir(), 'atlas-cache-'))
   t.after(() => rm(folder, { recursive: true, force: true }))
@@ -132,6 +158,7 @@ test('coalesced writes make strict preferences durable alongside concurrent list
   const restored = new IssueCache(path, 'connection')
   await restored.load()
   assert.deepEqual(restored.getNotificationPreferences('P34'), {
+    enabled: true,
     excludedStatuses: ['Done'],
     includeDrafts: false,
   })

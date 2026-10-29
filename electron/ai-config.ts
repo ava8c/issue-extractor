@@ -1,7 +1,7 @@
 import { readFile, writeFile, rename } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { defaultAISettings, type AISettings, type AISettingsInput } from '../src/shared/estimates'
-import type { SecretStorage } from './email-config'
+import type { SecretStorage } from './grok-config'
 
 export function validateAISettings(value: AISettingsInput): AISettingsInput {
   value = { ...defaultAISettings(), ...value }

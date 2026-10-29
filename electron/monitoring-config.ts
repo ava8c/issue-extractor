@@ -1,5 +1,5 @@
 import { readFile, writeFile, rename } from 'node:fs/promises'
-import type { SecretStorage } from './email-config'
+import type { SecretStorage } from './grok-config'
 import {
   defaultMonitoringSettings,
   type MonitoringSettings,

@@ -6,6 +6,7 @@ import {
   ipcMain,
   Menu,
   nativeImage,
+  Notification,
   safeStorage,
   session,
   shell,
@@ -17,6 +18,7 @@ import { createHash } from 'node:crypto'
 import { GitHubClient, normalizeHost } from './github'
 import { IssueCache } from './issue-cache'
 import { ActivityService } from './activity'
+import { DesktopNotifications } from './notifications'
 import { AIConfig, validateAISettings } from './ai-config'
 import { EstimateService } from './estimates'
 import { MonitoringConfig } from './monitoring-config'
@@ -24,11 +26,11 @@ import { MonitoringService, monitoringPayload, verifyMonitoring } from './monito
 import { emptyMonitoringStatus, type MonitoringSettingsInput } from '../src/shared/monitoring'
 import { OpenAIClient } from './openai'
 import type { AISettingsInput, ProjectEstimateSettings } from '../src/shared/estimates'
-import type { ProjectNotificationPreferences } from '../src/shared/activity'
-import { EmailConfig } from './email-config'
-import { EmailDispatcher, verifySmtp, sendTestEmail } from './email'
-import { MAX_MAIL_IMAGE_BYTES } from './email-message'
-import { emptyEmailStatus, type EmailSettingsInput } from '../src/shared/email'
+import { notificationsEnabled, type ProjectNotificationPreferences } from '../src/shared/activity'
+import { GrokConfig } from './grok-config'
+import { GrokDispatcher, verifyWebhook, testWebhook } from './grok'
+import { emptyEmailStatus } from '../src/shared/email'
+import type { GrokSettingsInput } from '../src/shared/grok'
 import { issueScope } from '../src/shared/loading'
 import { createExport, downloadAsset, safeFilename } from './assets'
 import { nativeAssetFetch } from './network'
@@ -36,7 +38,13 @@ import { issueMarkdown } from '../src/shared/export'
 import { disabledHandoff, type HandoffStatus } from '../src/shared/handoff'
 import { loadHandoffConfig } from './handoff-config'
 import { HandoffStore, startHandoffServer } from './handoff'
-import type { Settings, SettingsInput, Issue, IssueDetail } from '../src/shared/types'
+import type {
+  Settings,
+  SettingsInput,
+  Issue,
+  IssueDetail,
+  IssueNotification,
+} from '../src/shared/types'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const defaults: Settings = {
@@ -53,12 +61,22 @@ let token = ''
 let githubClient: GitHubClient | undefined
 let issueCache: Promise<IssueCache> | undefined
 let activityService: ActivityService | undefined
+let connectionRevision = 0
+let pendingNotification: IssueNotification | undefined
+const desktopNotifications = new DesktopNotifications(
+  (options) => (Notification.isSupported() ? new Notification(options) : undefined),
+  (item) => void openNativeNotification(item).catch(() => {}),
+  notificationsChanged,
+  (ids) => {
+    if (process.platform === 'darwin') Notification.remove(ids)
+  },
+)
 let aiConfig: AIConfig
 let estimateService: Promise<EstimateService> | undefined
 let monitoringConfig: MonitoringConfig
 let monitoringService: Promise<MonitoringService> | undefined
-let emailConfig: EmailConfig
-let emailDispatcher: EmailDispatcher | undefined
+let grokConfig: GrokConfig
+let grokDispatcher: GrokDispatcher | undefined
 let handoffStatus: HandoffStatus = disabledHandoff
 let handoffStore: HandoffStore | undefined
 let handoffServer: Awaited<ReturnType<typeof startHandoffServer>> | undefined
@@ -105,17 +123,34 @@ async function client() {
 async function cache() {
   if (!issueCache) {
     issueCache = (async () => {
+      const revision = connectionRevision
       const value = await getToken()
       const scope = createHash('sha256').update(`${config.host}\n${value}`).digest('hex')
       const store = new IssueCache(join(app.getPath('userData'), 'issue-cache.json'), scope)
       await store.load()
-      await store.configureEmail(emailConfig.target())
+      await store.configureEmail(grokConfig.target())
+      if (process.platform === 'darwin' && Notification.isSupported()) {
+        const delivered = await Notification.getHistory().catch(() => [])
+        if (revision === connectionRevision)
+          desktopNotifications.restore(
+            delivered,
+            store
+              .notifications()
+              .items.filter((item) =>
+                notificationsEnabled(item.issue, store.getNotificationPreferences(item.projectId)),
+              ),
+          )
+      }
       return store
     })()
   }
   return issueCache
 }
 async function resetConnection() {
+  connectionRevision++
+  pendingNotification = undefined
+  desktopNotifications.clear()
+  if (process.platform === 'darwin' && Notification.isSupported()) Notification.removeAll()
   if (monitoringService) await (await monitoringService).clear()
   else
     await unlink(join(app.getPath('userData'), 'monitoring-outbox.json')).catch(
@@ -133,8 +168,8 @@ async function resetConnection() {
       },
     )
   estimateService = undefined
-  emailDispatcher?.stop()
-  emailDispatcher = undefined
+  grokDispatcher?.stop()
+  grokDispatcher = undefined
   if (issueCache) await (await issueCache).clear()
   else
     await unlink(join(app.getPath('userData'), 'issue-cache.json')).catch(
@@ -148,8 +183,41 @@ async function resetConnection() {
   issueRequests.clear()
 }
 async function activity() {
+  const revision = connectionRevision
   const [github, store] = await Promise.all([client(), cache()])
-  return (activityService ??= new ActivityService(github, store, flushEmail))
+  if (revision !== connectionRevision) throw new Error('La connessione è cambiata.')
+  return (activityService ??= new ActivityService(github, store, flushGrok, (items) => {
+    if (revision !== connectionRevision) return
+    desktopNotifications.show(
+      items,
+      (projectId) =>
+        store.getWorkspace()?.workspace.projects.find((project) => project.id === projectId)
+          ?.title ?? projectId,
+    )
+  }))
+}
+function notificationsChanged() {
+  if (window && !window.isDestroyed()) window.webContents.send('activity:changed')
+}
+async function notificationState() {
+  return { ...(await cache()).notifications(), nativeError: desktopNotifications.error }
+}
+async function openNativeNotification(item: IssueNotification) {
+  if (!config.hasToken) return
+  const revision = connectionRevision
+  const store = await cache()
+  if (revision !== connectionRevision) return
+  if (!store.notifications().items.some((event) => event.id === item.id)) return
+  await store.markNotificationsRead([item.id])
+  if (revision !== connectionRevision) return
+  pendingNotification = item
+  if (!window || window.isDestroyed()) await createWindow()
+  if (revision !== connectionRevision) return
+  if (window.isMinimized()) window.restore()
+  window.show()
+  window.focus()
+  window.webContents.send('activity:open')
+  notificationsChanged()
 }
 function estimatesChanged() {
   if (window && !window.isDestroyed()) window.webContents.send('estimates:changed')
@@ -213,26 +281,15 @@ async function monitorEstimates(projectIds: string[]) {
     ),
   )
 }
-async function mail() {
+async function grok() {
   const [github, store] = await Promise.all([client(), cache()])
-  return (emailDispatcher ??= new EmailDispatcher(
-    store,
-    emailConfig,
-    (notification) => github.notificationContent(notification),
-    async (url) =>
-      downloadAsset(
-        url,
-        config.host,
-        await getToken(),
-        config.assetHosts,
-        nativeAssetFetch,
-        MAX_MAIL_IMAGE_BYTES,
-      ),
+  return (grokDispatcher ??= new GrokDispatcher(store, grokConfig, (notification) =>
+    github.notificationContent(notification),
   ))
 }
-function flushEmail() {
-  if (!emailConfig.target() || !config.hasToken) return
-  void mail()
+function flushGrok() {
+  if (!grokConfig.target() || !config.hasToken) return
+  void grok()
     .then((dispatcher) => dispatcher.kick())
     .catch(() => {})
 }
@@ -419,11 +476,11 @@ app
     handle('estimates:recalculate', async (projectId: string, issueId: string) =>
       (await estimates()).recalculate(projectId, issueId),
     )
-    emailConfig = new EmailConfig(join(app.getPath('userData'), 'email.json'), {
+    grokConfig = new GrokConfig(join(app.getPath('userData'), 'email.json'), {
       encrypt: async (value) => {
         if (!(await safeStorage.isAsyncEncryptionAvailable()))
           throw new Error(
-            'Portachiavi non disponibile. La password SMTP non verrà salvata in chiaro.',
+            'Portachiavi non disponibile. La credenziale Grok non verrà salvata in chiaro.',
           )
         return (await safeStorage.encryptStringAsync(value)).toString('base64')
       },
@@ -432,43 +489,44 @@ app
           return (await safeStorage.decryptStringAsync(Buffer.from(value, 'base64'))).result
         } catch {
           throw new Error(
-            'Impossibile leggere la password SMTP dal Portachiavi. Reinseriscila nelle impostazioni.',
+            'Impossibile leggere la credenziale Grok dal Portachiavi. Reinseriscila nelle impostazioni.',
           )
         }
       },
     })
-    await emailConfig
+    await grokConfig
       .load()
-      .catch((error) => dialog.showErrorBox('Email non disponibili', error.message))
-    const emailTimer = setInterval(flushEmail, 60_000)
-    emailTimer.unref()
+      .catch((error) => dialog.showErrorBox('Grok non disponibile', error.message))
+    const grokTimer = setInterval(flushGrok, 60_000)
+    grokTimer.unref()
     app.on('before-quit', () => {
-      clearInterval(emailTimer)
-      emailDispatcher?.stop()
+      clearInterval(grokTimer)
+      grokDispatcher?.stop()
       void estimateService?.then((service) => service.stop())
     })
-    handle('email:settings', () => emailConfig.settings())
-    handle('email:save', async (input: EmailSettingsInput) => {
-      const settings = await emailConfig.save(input)
-      emailDispatcher?.stop()
-      emailDispatcher = undefined
-      if (issueCache) await (await issueCache).configureEmail(emailConfig.target())
+    handle('grok:settings', () => grokConfig.settings())
+    handle('grok:save', async (input: GrokSettingsInput) => {
+      const settings = await grokConfig.save(input)
+      grokDispatcher?.stop()
+      grokDispatcher = undefined
+      if (issueCache) await (await issueCache).configureEmail(grokConfig.target())
       return settings
     })
-    handle('email:verify', (input: EmailSettingsInput) => verifySmtp(emailConfig, input))
-    handle('email:test', (input: EmailSettingsInput) => sendTestEmail(emailConfig, input))
-    handle('email:status', async () =>
-      config.hasToken ? (await cache()).emailStatus(emailConfig.revision()) : emptyEmailStatus(),
+    handle('grok:verify', (input: GrokSettingsInput) => verifyWebhook(grokConfig, input))
+    handle('grok:test', (input: GrokSettingsInput) => testWebhook(grokConfig, input))
+    handle('grok:history', async () => (config.hasToken ? (await cache()).deliveryHistory() : []))
+    handle('grok:status', async () =>
+      config.hasToken ? (await cache()).emailStatus(grokConfig.revision()) : emptyEmailStatus(),
     )
-    handle('email:retry', async (includeUncertain?: boolean) => {
-      if (!config.hasToken || !emailConfig.target())
+    handle('grok:retry', async (includeUncertain?: boolean) => {
+      if (!config.hasToken || !grokConfig.target())
         throw new Error(
-          'Attiva la ricezione via mail e collega GitHub prima di riprovare gli invii.',
+          'Attiva l’invio webhook Grok e collega GitHub prima di riprovare gli invii.',
         )
-      await (await cache()).retryEmail(emailConfig.revision(), includeUncertain === true)
-      emailDispatcher?.stop()
-      emailDispatcher = undefined
-      flushEmail()
+      await (await cache()).retryEmail(grokConfig.revision(), includeUncertain === true)
+      grokDispatcher?.stop()
+      grokDispatcher = undefined
+      flushGrok()
     })
     handle('settings:get', () => config)
     handle('settings:test', async (value: SettingsInput) => {
@@ -526,7 +584,7 @@ app
       return layout
     })
     handle('github:cached-project', async (id: string, statuses?: string[]) =>
-      (await cache()).get(id, statuses),
+      (await cache()).available(id, statuses),
     )
     handle('github:issues', async (id: string, fieldName?: string, statuses?: string[]) => {
       const key = issueScope(id, statuses)
@@ -549,7 +607,11 @@ app
     handle('github:find-issues', async (number: number, projectIds: string[]) =>
       (await activity()).find(number, await activityProjects(projectIds)),
     )
-    handle('activity:get', async () => (await cache()).notifications())
+    handle('activity:get', notificationState)
+    handle('activity:pending-open', () => pendingNotification ?? null)
+    handle('activity:opened', (id: string) => {
+      if (pendingNotification?.id === id) pendingNotification = undefined
+    })
     handle('metrics:projects', async (projectIds: string[]) => {
       const projects = await activityProjects(projectIds)
       return (await cache()).projectMetrics(projects.map((project) => project.id))
@@ -559,16 +621,26 @@ app
     )
     handle(
       'activity:save-preferences',
-      async (projectId: string, preferences: ProjectNotificationPreferences) =>
-        (await cache()).setNotificationPreferences(projectId, preferences),
+      async (projectId: string, preferences: ProjectNotificationPreferences) => {
+        const saved = await (await cache()).setNotificationPreferences(projectId, preferences)
+        desktopNotifications.dismiss(
+          (item) => item.projectId === projectId && !notificationsEnabled(item.issue, saved),
+        )
+        return saved
+      },
     )
     handle('activity:sync', async (projectIds: string[], force?: boolean) => {
       const projects = await activityProjects(projectIds)
       const result = await (await activity()).sync(projects, force === true)
       void monitorEstimates(projects.map((project) => project.id)).catch(() => estimatesChanged())
-      return result
+      return { ...result, nativeError: desktopNotifications.error }
     })
-    handle('activity:read', async (ids: string[]) => (await cache()).markNotificationsRead(ids))
+    handle('activity:read', async (ids: string[]) => {
+      await (await cache()).markNotificationsRead(ids)
+      const selected = new Set(ids)
+      desktopNotifications.dismiss((item) => selected.has(item.id))
+      return notificationState()
+    })
     const download = async (url: string, signal?: AbortSignal) => {
       if (!config.hasToken && url === 'https://demo.issueatlas.local/assets/dashboard.png') {
         return {

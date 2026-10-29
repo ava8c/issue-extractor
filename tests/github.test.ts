@@ -9,7 +9,7 @@ import { buildSchema, parse, validate } from 'graphql'
 import { GitHubClient, endpoints, normalizeHost } from '../electron/github'
 import { ActivityService } from '../electron/activity'
 import { IssueCache } from '../electron/issue-cache'
-import type { Project } from '../src/shared/types'
+import type { Issue, IssueNotification, Project } from '../src/shared/types'
 import { notification } from './fixtures/email'
 
 const simulation = process.env.GITHUB_SIMULATION_URL
@@ -123,6 +123,232 @@ test('resolves Enterprise and github.com endpoints and rejects insecure hosts', 
   assert.throws(() => normalizeHost('http://github.example'))
   assert.throws(() => normalizeHost('https://token@github.example'))
 })
+
+test(
+  'real HTTP against Postman: the token account is detected automatically and own events still reach every email recipient',
+  { skip: !simulation },
+  async (t) => {
+    const folder = await mkdtemp(join(tmpdir(), 'atlas-identity-http-'))
+    t.after(() => rm(folder, { recursive: true, force: true }))
+    const cache = new IssueCache(join(folder, 'cache.json'), 'identity')
+    const github = client()
+    const activity = new ActivityService(github, cache)
+    const projectId = `IDENTITY-${randomUUID()}`
+    const issueId = `IDENTITY-ISSUE-${randomUUID()}`
+    const own = { login: 'tester', name: 'Mario Rossi' }
+    const other = { login: 'other', name: 'Altra Persona' }
+    const projects = [{ id: projectId, title: 'Own project' }] as Project[]
+    const fixture = async (value: object) => {
+      const response = await fetch(`${simulation}/notification-fixture`, {
+        method: 'POST',
+        body: JSON.stringify(value),
+      })
+      assert.equal(response.status, 200)
+    }
+    const content = {
+      __typename: 'Issue',
+      id: issueId,
+      number: 42,
+      title: 'Own activity',
+      repository: { nameWithOwner: 'org/repo' },
+      url: 'https://github.example/org/repo/issues/42',
+      state: 'OPEN',
+      createdAt: '2026-10-20T10:00:00Z',
+      updatedAt: '2026-10-20T10:00:00Z',
+      comments: { totalCount: 1 },
+    }
+    const item = (status: string, count: number) => ({
+      creator: own,
+      fieldValueByName: { name: status },
+      content: { ...content, comments: { totalCount: count } },
+    })
+    cache.setLayout(projectId, { statusFieldName: 'Status', statuses: [] })
+    await cache.configureEmail({
+      revision: 'own-mail',
+      recipients: ['team@example.com', 'other@example.com'],
+    })
+    await fixture({ id: projectId, items: [item('Todo', 1)] })
+    assert.deepEqual((await activity.sync(projects, true)).items, [])
+    const since = new Date(cache.activityTimestamp(projectId)).toISOString()
+    await fixture({
+      id: issueId,
+      comments: [{ author: other }, { author: own }, { author: own }],
+      events: [
+        {
+          __typename: 'ProjectV2ItemStatusChangedEvent',
+          actor: other,
+          project: { id: 'another-project' },
+          status: 'Done',
+          createdAt: since,
+        },
+        {
+          __typename: 'ProjectV2ItemStatusChangedEvent',
+          actor: own,
+          project: { id: projectId },
+          status: 'Done',
+          wasAutomated: false,
+          createdAt: since,
+        },
+      ],
+    })
+    await fixture({ id: projectId, items: [item('Done', 3)] })
+    const result = await activity.sync(projects, true)
+    assert.deepEqual(result.errors, [])
+    assert.equal(result.items.length, 2)
+    assert.ok(result.items.every((item) => item.read))
+    assert.equal(cache.getNotificationLogin(), 'tester')
+    assert.equal(github.requests.filter(({ query }) => query.includes('query Identity')).length, 1)
+    assert.equal(cache.emailStatus('own-mail').pending, 4)
+    assert.equal(cache.nextEmail('own-mail')?.notification.read, true)
+    assert.ok(
+      github.requests
+        .filter(({ query }) => /query Notification(?:Comment|Status)Actors/.test(query))
+        .every(({ query }) => !/\bbody\b/.test(query)),
+    )
+    await fixture({
+      id: issueId,
+      comments: [
+        { author: other },
+        { author: own },
+        { author: own },
+        { author: own },
+        { author: other },
+      ],
+      events: [],
+    })
+    await fixture({ id: projectId, items: [item('Done', 5)] })
+    const mixed = await activity.sync(projects, true)
+    assert.equal(mixed.items.find((item) => item.issue.commentCount === 5)?.read, false)
+    await fixture({ id: issueId, comments: [], events: [], unsupportedTimeline: true })
+    await fixture({ id: projectId, items: [item('Todo', 5)] })
+    const unsupported = await activity.sync(projects, true)
+    assert.deepEqual(unsupported.errors, [])
+    assert.equal(
+      unsupported.items.find((item) => item.type === 'status' && item.toStatus === 'Todo')?.read,
+      false,
+    )
+    assert.equal(
+      cache.activityIssues(projectId)[0].status,
+      'Todo',
+      'Missing actor metadata does not block the pipeline or baseline',
+    )
+    assert.equal(github.requests.filter(({ query }) => query.includes('query Identity')).length, 1)
+  },
+)
+
+test(
+  'real HTTP against Postman: automatic identity reuses token validation while connection checks still contact GitHub',
+  { skip: !simulation },
+  async () => {
+    const github = client()
+    assert.deepEqual(
+      await Promise.all([github.authenticatedLogin(), github.authenticatedLogin()]),
+      ['tester', 'tester'],
+    )
+    assert.equal(github.requests.length, 1)
+    assert.equal(await github.authenticatedLogin(), 'tester')
+    assert.equal(github.requests.length, 1)
+    assert.equal(await github.testConnection(), 'tester')
+    assert.equal(
+      github.requests.length,
+      2,
+      'Connection checks must still detect a lost network connection',
+    )
+    const validated = client()
+    await validated.testConnection()
+    assert.equal(await validated.authenticatedLogin(), 'tester')
+    assert.equal(validated.requests.length, 1, 'A validated token already identifies the account')
+  },
+)
+
+test(
+  'real HTTP against Postman: notification actors include every new comment across pages and reject races or missing authors',
+  { skip: !simulation },
+  async () => {
+    const github = client()
+    const issueId = `ACTORS-${randomUUID()}`
+    const own = { login: 'm12345' }
+    const comments = Array.from({ length: 105 }, () => ({ author: own }))
+    const fixture = async (value: object) => {
+      assert.equal(
+        (
+          await fetch(`${simulation}/notification-fixture`, {
+            method: 'POST',
+            body: JSON.stringify({ id: issueId, ...value }),
+          })
+        ).status,
+        200,
+      )
+    }
+    await fixture({ comments })
+    const event = {
+      type: 'comment',
+      newCommentCount: 103,
+      issue: { id: issueId, kind: 'issue', commentCount: 105 },
+    } as IssueNotification
+    const actors = await github.notificationActors(event, undefined, 0)
+    assert.equal(actors.length, 103)
+    assert.ok(actors.every((actor) => actor?.login === own.login))
+    assert.equal(github.requests.length, 2)
+    await fixture({ comments: [...comments, { author: own }] })
+    assert.deepEqual(await github.notificationActors(event, undefined, 0), [null])
+    await fixture({ comments: [{ author: null }] })
+    assert.deepEqual(
+      await github.notificationActors(
+        { ...event, newCommentCount: 1, issue: { ...event.issue, commentCount: 1 } },
+        undefined,
+        0,
+      ),
+      [null],
+    )
+  },
+)
+
+test(
+  'real HTTP against Postman: status attribution uses project and lifecycle actors without guessing from the issue author',
+  { skip: !simulation },
+  async () => {
+    const github = client()
+    const issueId = `STATUS-ACTORS-${randomUUID()}`
+    const since = Date.parse('2026-10-20T10:00:00Z')
+    const own = { login: 'm12345' }
+    const other = { login: 'other' }
+    const previous = { id: issueId, kind: 'pull-request', state: 'OPEN', status: 'Todo' } as Issue
+    const event = {
+      type: 'status',
+      projectId: 'P1',
+      issue: { ...previous, state: 'MERGED', status: 'Done' },
+    } as IssueNotification
+    const events = [
+      {
+        __typename: 'ProjectV2ItemStatusChangedEvent',
+        actor: other,
+        project: { id: 'P1' },
+        status: 'Done',
+        createdAt: '2026-10-19T10:00:00Z',
+      },
+      ...Array.from({ length: 101 }, () => ({
+        __typename: 'OtherEvent',
+        createdAt: '2026-10-21T10:00:00Z',
+      })),
+      {
+        __typename: 'ProjectV2ItemStatusChangedEvent',
+        actor: own,
+        project: { id: 'P1' },
+        status: 'Done',
+        wasAutomated: false,
+        createdAt: '2026-10-21T10:00:00Z',
+      },
+      { __typename: 'MergedEvent', actor: other, createdAt: '2026-10-21T10:00:00Z' },
+    ]
+    await fetch(`${simulation}/notification-fixture`, {
+      method: 'POST',
+      body: JSON.stringify({ id: issueId, events }),
+    })
+    assert.deepEqual(await github.notificationActors(event, previous, since), [own, other])
+    assert.equal(github.requests.length, 2)
+  },
+)
 
 test(
   'real HTTP against Postman: overlapping activity batches share two slots and deduplicate queued projects',

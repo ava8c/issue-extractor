@@ -39,7 +39,7 @@ export function ProjectNotificationSettings({
         return api.notificationPreferences(project.id)
       })
       .then((value) => {
-        if (active) setPreferences(value)
+        if (active) setPreferences(readNotificationPreferences(value))
       })
       .catch((error) => {
         if (active) setError(errorMessage(error))
@@ -98,51 +98,86 @@ export function ProjectNotificationSettings({
           </button>
         </div>
         <p className="project-notification-description">
-          Ricevi notifiche nell’app e via mail solo per gli stati selezionati. La regola vale per
-          nuove issue, cambi verso questi stati e nuovi commenti.
+          Ricevi notifiche native macOS, nell’app e su Grok per nuove issue, cambi di stato e nuovi
+          commenti.
         </p>
         {loading ? (
           <p role="status">Caricamento preferenze…</p>
         ) : (
-          <fieldset disabled={saving || !!error}>
-            <legend>Stati abilitati alle notifiche</legend>
-            <div className="status-filter-actions">
-              <button type="button" onClick={() => setPreferences(readNotificationPreferences())}>
-                Tutti
-              </button>
-              <button
-                type="button"
-                onClick={() =>
-                  setPreferences({
-                    excludedStatuses: options.map((status) => status.name),
-                    includeDrafts: false,
-                  })
+          <>
+            <label className="project-notification-toggle">
+              <input
+                type="checkbox"
+                role="switch"
+                checked={preferences.enabled}
+                disabled={saving || !!error}
+                onChange={(event) =>
+                  setPreferences((current) => ({ ...current, enabled: event.target.checked }))
                 }
-              >
-                Nessuno
-              </button>
-            </div>
-            <StatusSelectionOptions
-              statuses={options}
-              isSelected={(name) => !preferences.excludedStatuses.includes(name)}
-              toggle={(name) =>
-                setPreferences((current) => ({
-                  ...current,
-                  excludedStatuses: current.excludedStatuses.includes(name)
-                    ? current.excludedStatuses.filter((status) => status !== name)
-                    : [...current.excludedStatuses, name],
-                }))
-              }
-              includeDrafts={preferences.includeDrafts}
-              onDrafts={(includeDrafts) =>
-                setPreferences((current) => ({ ...current, includeDrafts }))
-              }
-            />
-          </fieldset>
+              />
+              <span>
+                <strong>Abilita notifiche per questo progetto</strong>
+                <small>
+                  {preferences.enabled
+                    ? 'Ricevi aggiornamenti per gli stati selezionati.'
+                    : 'Progetto silenziato. I filtri restano salvati per quando lo riattivi.'}
+                </small>
+              </span>
+            </label>
+            <fieldset disabled={saving || !!error || !preferences.enabled}>
+              <legend>Stati abilitati alle notifiche</legend>
+              <div className="status-filter-actions">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setPreferences((current) => ({
+                      ...current,
+                      excludedStatuses: [],
+                      includeDrafts: true,
+                    }))
+                  }
+                >
+                  Tutti
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setPreferences((current) => ({
+                      ...current,
+                      excludedStatuses: options.map((status) => status.name),
+                      includeDrafts: false,
+                    }))
+                  }
+                >
+                  Nessuno
+                </button>
+              </div>
+              <StatusSelectionOptions
+                statuses={options}
+                isSelected={(name) => !preferences.excludedStatuses.includes(name)}
+                toggle={(name) =>
+                  setPreferences((current) => ({
+                    ...current,
+                    excludedStatuses: current.excludedStatuses.includes(name)
+                      ? current.excludedStatuses.filter((status) => status !== name)
+                      : [...current.excludedStatuses, name],
+                  }))
+                }
+                includeDrafts={preferences.includeDrafts}
+                onDrafts={(includeDrafts) =>
+                  setPreferences((current) => ({ ...current, includeDrafts }))
+                }
+              />
+            </fieldset>
+          </>
         )}
         <p className="project-notification-description">
           Deseleziona Bozze per escluderle in qualsiasi stato. Le preferenze sono indipendenti dai
           filtri della lista; le notifiche già ricevute restano nello storico.
+        </p>
+        <p className="project-notification-description">
+          Le notifiche macOS arrivano con l’app aperta, anche in background. Puoi consentirle in
+          Impostazioni di Sistema → Notifiche → Issue Atlas.
         </p>
         {error && (
           <div role="alert" className="notice error">

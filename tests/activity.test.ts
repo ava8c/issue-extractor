@@ -7,9 +7,11 @@ import {
   detectActivity,
   findIssueLocations,
   readNotificationPreferences,
+  readNotificationLogin,
+  isOwnNotification,
 } from '../src/shared/activity'
 import { IssueCache } from '../electron/issue-cache'
-import type { Issue } from '../src/shared/types'
+import type { Issue, IssueNotification } from '../src/shared/types'
 
 const issue: Issue = {
   id: 'I1',
@@ -77,6 +79,103 @@ test('quick lookup preserves every project membership and distinguishes the same
     assert.deepEqual(findIssueLocations(number, ['P1'], indexes), [])
 })
 
+test('quick lookup sorts duplicate numbers by creation, then update time, preserving memberships and stable ties', () => {
+  const newer = { ...issue, id: 'new', createdAt: '2026-10-25T10:00:00Z' }
+  const updated = { ...issue, id: 'updated', updatedAt: '2026-10-26T10:00:00Z' }
+  const indexes = {
+    P1: { issues: [issue, newer] },
+    P2: { issues: [updated, newer, { ...issue, id: 'invalid', createdAt: '', updatedAt: '' }] },
+  }
+  assert.deepEqual(
+    findIssueLocations(42, ['P1', 'P2'], indexes).map(({ projectId, issue }) => [
+      projectId,
+      issue.id,
+    ]),
+    [
+      ['P1', 'new'],
+      ['P2', 'new'],
+      ['P2', 'updated'],
+      ['P1', 'I1'],
+      ['P2', 'invalid'],
+    ],
+  )
+  assert.equal(indexes.P1.issues[0].id, 'I1')
+})
+
+test('notification identity matches the token account login, while namesakes and mixed or unknown actors remain unread', () => {
+  assert.equal(readNotificationLogin(' M12345 '), 'm12345')
+  assert.equal(readNotificationLogin(null), '')
+  const event = { actors: [{ login: 'M12345', name: 'Mario Rossi' }] } as IssueNotification
+  assert.equal(isOwnNotification(event, ' m12345 '), true)
+  assert.equal(isOwnNotification(event, 'Mario Rossi'), false)
+  assert.equal(isOwnNotification(event, ''), false)
+  assert.equal(
+    isOwnNotification({ ...event, actors: [{ login: 'other', name: 'Mario Rossi' }] }, 'm12345'),
+    false,
+  )
+  assert.equal(
+    isOwnNotification({ ...event, actors: [...event.actors!, { login: 'other' }] }, 'm12345'),
+    false,
+  )
+  assert.equal(isOwnNotification({ ...event, actors: [null] }, 'm12345'), false)
+  assert.equal(isOwnNotification({ ...event, actors: [] }, 'm12345'), false)
+  assert.equal(isOwnNotification({ ...event, actors: undefined }, 'm12345'), false)
+})
+
+test('own activity stays in history and the email pipeline, with identity and read status persisted across restart', async (t) => {
+  const folder = await mkdtemp(join(tmpdir(), 'atlas-own-activity-'))
+  t.after(() => rm(folder, { recursive: true, force: true }))
+  const path = join(folder, 'cache.json')
+  const cache = new IssueCache(path, 'account')
+  const target = {
+    revision: 'identity-test',
+    recipients: ['other@example.com', 'team@example.com'],
+  }
+  await cache.configureEmail(target)
+  await cache.setNotificationLogin('M12345')
+  await cache.recordActivity('P1', [issue], 100)
+  const current = { ...issue, status: 'Done', commentCount: 4 }
+  const events = detectActivity('P1', [issue], [current], 200).map((event) => ({
+    ...event,
+    actors: [{ login: 'm12345' }],
+  }))
+  await cache.recordActivity('P1', [current], 200, events)
+  assert.equal(cache.notifications().items.length, 2)
+  assert.ok(cache.notifications().items.every((item) => item.read))
+  assert.equal(
+    cache.emailStatus(target.revision).pending,
+    4,
+    'Every own event is still queued for both recipients',
+  )
+  assert.equal(cache.nextEmail(target.revision)?.notification.read, true)
+  const restored = new IssueCache(path, 'account')
+  await restored.load()
+  await restored.configureEmail(target)
+  assert.equal(restored.getNotificationLogin(), 'm12345')
+  assert.ok(restored.notifications().items.every((item) => item.read))
+  assert.equal(restored.emailStatus(target.revision).pending, 4)
+  const added = { ...issue, id: 'own-new', projectItemCreator: { login: 'm12345' } }
+  await restored.recordActivity('P1', [current, added], 300)
+  assert.equal(
+    restored.notifications().items.find((item) => item.issue.id === added.id)?.read,
+    true,
+  )
+  await restored.setNotificationLogin('other')
+  const next = { ...added, id: 'own-next' }
+  await restored.recordActivity('P1', [current, added, next], 400)
+  assert.equal(
+    restored.notifications().items.find((item) => item.issue.id === next.id)?.read,
+    false,
+  )
+  assert.equal(
+    restored.notifications().items.find((item) => item.issue.id === added.id)?.read,
+    true,
+  )
+  const otherAccount = new IssueCache(path, 'other-account')
+  await otherAccount.load()
+  assert.equal(otherAccount.getNotificationLogin(), '')
+})
+
 test('activity and read state survive restart, and the same comment change across projects is notified once', async (t) => {
   const folder = await mkdtemp(join(tmpdir(), 'atlas-activity-'))
   t.after(() => rm(folder, { recursive: true, force: true }))
@@ -118,6 +217,7 @@ test('per-project exclusions silence new issues, destination states, closures an
   const path = join(folder, 'cache.json')
   const cache = new IssueCache(path, 'account')
   assert.deepEqual(cache.getNotificationPreferences('P1'), {
+    enabled: true,
     excludedStatuses: [],
     includeDrafts: true,
   })
@@ -147,6 +247,7 @@ test('per-project exclusions silence new issues, destination states, closures an
   const restored = new IssueCache(path, 'account')
   await restored.load()
   assert.deepEqual(restored.getNotificationPreferences('P1'), {
+    enabled: true,
     excludedStatuses: ['Done', 'Senza stato'],
     includeDrafts: false,
   })

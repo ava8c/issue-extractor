@@ -57,7 +57,8 @@ import type {
   SettingsInput,
   Workspace,
 } from './shared/types'
-import { errorMessage } from './shared/errors'
+import { errorMessage, isGitHubUnavailable } from './shared/errors'
+import { useGitHubConnection } from './useGitHubConnection'
 import { issueScope, mapConcurrent, PROJECT_CACHE_MAX_AGE } from './shared/loading'
 import { labelColors } from './shared/colors'
 import {
@@ -79,7 +80,7 @@ import { QuickIssueSearch } from './components/QuickIssueSearch'
 import { NotificationCenter } from './components/NotificationCenter'
 import { ProjectNotificationSettings } from './components/ProjectNotificationSettings'
 import { useActivity } from './useActivity'
-import { EmailSettingsPanel } from './components/EmailSettings'
+import { GrokSettingsPanel } from './components/GrokSettings'
 import { AISettingsPanel, ProjectEstimateSettingsModal } from './components/EstimateSettings'
 import { MonitoringSettingsPanel } from './components/MonitoringSettings'
 import { EstimateBadge, IssueEstimatePanel } from './components/IssueEstimate'
@@ -241,7 +242,7 @@ function SettingsModal({
               ? 'Le stime, sempre visibili.'
               : settingsTab === 'monitoring'
                 ? 'Le stime, nei tuoi rapportini.'
-                : 'Ricevi notifiche via mail.'}
+                : 'Invia le notifiche a Grok tramite webhook.'}
         </h2>
         <p className="modal-description">
           {settingsTab === 'github'
@@ -250,7 +251,7 @@ function SettingsModal({
               ? 'Scegli modello e limiti, poi abilita i singoli progetti.'
               : settingsTab === 'monitoring'
                 ? 'Collega Monitoraggio e prepara le attività da pianificare.'
-                : 'I cambiamenti delle tue issue, direttamente nella tua casella.'}
+                : 'Invia i cambiamenti delle issue alla routine Grok e controlla lo storico delle consegne.'}
         </p>
         <div className="settings-tabs" role="tablist" aria-label="Sezione impostazioni">
           <button
@@ -269,7 +270,7 @@ function SettingsModal({
             disabled={saving || testing}
             onClick={() => setSettingsTab('email')}
           >
-            Notifiche via mail
+            Grok / webhook
           </button>
           <button
             type="button"
@@ -295,7 +296,7 @@ function SettingsModal({
         ) : settingsTab === 'ai' ? (
           <AISettingsPanel api={api} onBusy={setSaving} saved={onAISaved} />
         ) : settingsTab === 'email' ? (
-          <EmailSettingsPanel api={api} onBusy={setSaving} />
+          <GrokSettingsPanel api={api} onBusy={setSaving} />
         ) : (
           <>
             {!native && (
@@ -535,7 +536,16 @@ export function App() {
   const contentRef = useRef<HTMLDivElement>(null)
   const cache = useRef(new Map<string, CachedProject>())
   const isDemo = !settings?.hasToken
-  const api = isDemo ? demoAPI : (native ?? demoAPI)
+  const connection = useGitHubConnection(isDemo ? demoAPI : (native ?? demoAPI), settings)
+  const { api, offline } = connection
+  const wasOffline = useRef(false)
+  useEffect(() => {
+    if (wasOffline.current && !offline) {
+      setRefresh(Date.now())
+      setDetailRefresh((value) => value + 1)
+    }
+    wasOffline.current = offline
+  }, [offline])
   const preferenceKey = settings ? `atlas:preferences:${isDemo ? 'demo' : settings.host}` : null
   const preferences = useMemo(
     () =>
@@ -668,14 +678,13 @@ export function App() {
   }, [selectedProject, visibleProjectKey, projects.length])
 
   const assets = useMemo(() => (detail ? collectAssets(detail) : []), [detail])
-  const notify = useCallback(
-    (text: string, error = false) =>
-      setToast({
-        text: errorMessage(text),
-        error,
-      }),
-    [],
-  )
+  const notify = useCallback((text: string, error = false) => {
+    if (isGitHubUnavailable(text)) return
+    setToast({
+      text: errorMessage(text),
+      error,
+    })
+  }, [])
   const openImage = useCallback((src: string, alt: string) => setLightbox({ src, alt }), [])
   useEffect(() => {
     const readStatus = (native ?? demoAPI).handoffStatus
@@ -774,7 +783,7 @@ export function App() {
       if (!active) return
       hasProjects = workspace.projects.length > 0
       setProjects([...workspace.projects])
-      setWarnings(workspace.warnings)
+      setWarnings(workspace.warnings.filter((warning) => !isGitHubUnavailable(warning)))
       setSelectedProject((current) =>
         current === 'all' ||
         current === 'dashboard' ||
@@ -800,6 +809,7 @@ export function App() {
     loadWorkspace()
       .catch((e) => {
         if (active) {
+          if (isGitHubUnavailable(e)) return
           if (hasProjects)
             notify(`Dati locali conservati. Aggiornamento progetti: ${errorMessage(e)}`, true)
           else {
@@ -891,7 +901,7 @@ export function App() {
             }
           } catch (error) {
             layout ??= { statusFieldName: 'Status', statuses: [] }
-            if (active)
+            if (active && !isGitHubUnavailable(error))
               setWarnings((current) => [
                 ...new Set([...current, `Stati di ${p.title}: ${errorMessage(error)}`]),
               ])
@@ -905,7 +915,7 @@ export function App() {
           while (cache.current.size > 30) cache.current.delete(cache.current.keys().next().value!)
           publish()
         } catch (error) {
-          failures.push(`${p.title}: ${errorMessage(error)}`)
+          if (!isGitHubUnavailable(error)) failures.push(`${p.title}: ${errorMessage(error)}`)
         }
       })
       if (active && failures.length) {
@@ -916,7 +926,7 @@ export function App() {
     }
     load()
       .catch((e) => {
-        if (active) setError(errorMessage(e))
+        if (active && !isGitHubUnavailable(e)) setError(errorMessage(e))
       })
       .finally(() => {
         if (active) {
@@ -1094,14 +1104,28 @@ export function App() {
     setNavigationTarget(null)
     setSelectedIssue(issue)
   }
-  function openIssueLocation(location: IssueLocation) {
+  const openIssueLocation = useCallback((location: IssueLocation) => {
     setQuickSearchOpen(false)
     setNotificationsOpen(false)
     setSelectedProject(location.projectId)
     setFavoritesOnly(false)
     setQuery('')
     setNavigationTarget(location)
-  }
+  }, [])
+  useEffect(() => {
+    if (!settings?.hasToken || loading) return
+    return api.onNotificationOpen?.((location) => {
+      setSettingsOpen(false)
+      setNotificationSettingsOpen(false)
+      setEstimateSettingsOpen(false)
+      setManagerOpen(false)
+      setStatusManagerOpen(false)
+      setMetricSettingsProject(null)
+      setLightbox(null)
+      openIssueLocation(location)
+      void activity.reload()
+    })
+  }, [api, settings, loading, openIssueLocation, activity.reload])
   function toggleFavorite(id: string) {
     setFavorites((current) =>
       current.includes(id) ? current.filter((i) => i !== id) : [...current, id],
@@ -1137,11 +1161,22 @@ export function App() {
               <strong>
                 {isDemo ? 'Workspace demo' : settings?.organizations[0] || 'Il mio workspace'}
               </strong>
-              <span>GitHub Enterprise</span>
+              <span
+                className={offline ? 'vpn-status' : undefined}
+                role={offline ? 'status' : undefined}
+              >
+                {offline ? 'In attesa di VPN' : 'GitHub Enterprise'}
+              </span>
             </div>
             <span
-              className={`connection-dot ${isDemo ? 'demo' : ''}`}
-              title={isDemo ? 'Modalità demo' : 'Token configurato'}
+              className={`connection-dot ${offline ? 'offline' : isDemo ? 'demo' : ''}`}
+              title={
+                offline
+                  ? 'GitHub non raggiungibile. Navigazione sui dati locali.'
+                  : isDemo
+                    ? 'Modalità demo'
+                    : 'Token configurato'
+              }
             />
           </div>
           <nav className="nav-primary" aria-label="Navigazione principale">
@@ -1333,8 +1368,18 @@ export function App() {
                     ? `Aggiorna · Ultima sincronizzazione: ${localDate(new Date(syncedAt).toISOString(), true)}`
                     : 'Aggiorna progetti e issue'
                 }
-                disabled={loading || syncing || discovering || activity.syncing}
-                onClick={() => {
+                disabled={
+                  loading || syncing || discovering || activity.syncing || connection.checking
+                }
+                onClick={async () => {
+                  if (
+                    offline &&
+                    !(await connection.check().catch((error) => {
+                      notify(errorMessage(error), true)
+                      return false
+                    }))
+                  )
+                    return
                   setRefresh(Date.now())
                   void activity.refresh(true)
                 }}
@@ -1664,14 +1709,18 @@ export function App() {
                               ? 'Nessuno stato selezionato'
                               : issues.length
                                 ? 'Nessuna corrispondenza'
-                                : 'Nessuna issue qui'}
+                                : offline
+                                  ? 'Nessuna issue salvata qui'
+                                  : 'Nessuna issue qui'}
                           </h3>
                           <p>
                             {statusFilter !== 'all' && !statusFilter.length
                               ? 'Seleziona almeno uno stato nel filtro per caricare le issue.'
                               : issues.length
                                 ? 'Prova un’altra ricerca o modifica i filtri.'
-                                : 'Le issue accessibili del progetto compariranno qui.'}
+                                : offline
+                                  ? 'Le issue saranno caricate quando la VPN sarà connessa.'
+                                  : 'Le issue accessibili del progetto compariranno qui.'}
                           </p>
                           {issues.length > 0 && (
                             <button
@@ -1830,7 +1879,7 @@ export function App() {
                                   ? 'Stima'
                                   : 'Anteprima export'
                           }
-                          key={displayIssue.id + tab}
+                          key={displayIssue.id + tab + detailRefresh}
                         >
                           {tab === 'estimate' && (
                             <IssueEstimatePanel
@@ -1853,22 +1902,35 @@ export function App() {
                             />
                           )}
 
-                          {detailLoading ? (
+                          {tab === 'estimate' ? null : detailLoading ? (
                             <div className="detail-loading">
                               <LoaderCircle className="spin" size={23} />
                               <p>Recupero descrizione e tutti i commenti…</p>
                             </div>
                           ) : detailError ? (
                             <div className="empty-state">
-                              <TriangleAlert size={27} />
-                              <h3>Conversazione non disponibile</h3>
-                              <p>{detailError}</p>
-                              <button
-                                className="button secondary"
-                                onClick={() => setDetailRefresh((v) => v + 1)}
-                              >
-                                Riprova
-                              </button>
+                              {isGitHubUnavailable(detailError) ? (
+                                <>
+                                  <BookOpen size={27} />
+                                  <h3>Contenuto non ancora caricato</h3>
+                                  <p>
+                                    Descrizione e commenti saranno disponibili quando la VPN sarà
+                                    connessa.
+                                  </p>
+                                </>
+                              ) : (
+                                <>
+                                  <TriangleAlert size={27} />
+                                  <h3>Conversazione non disponibile</h3>
+                                  <p>{detailError}</p>
+                                  <button
+                                    className="button secondary"
+                                    onClick={() => setDetailRefresh((v) => v + 1)}
+                                  >
+                                    Riprova
+                                  </button>
+                                </>
+                              )}
                             </div>
                           ) : detail && tab === 'conversation' ? (
                             <Conversation
@@ -2042,6 +2104,7 @@ export function App() {
             lastCheckedAt={activity.lastCheckedAt}
             syncing={activity.syncing}
             error={activity.error}
+            nativeError={activity.nativeError}
             onRefresh={() => void activity.refresh(true)}
             onRead={(ids) => void activity.markRead(ids)}
             onOpen={openIssueLocation}

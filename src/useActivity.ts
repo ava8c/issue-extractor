@@ -37,7 +37,8 @@ export function useActivity(
   }, [api, connection])
   useEffect(() => {
     void reload()
-  }, [reload])
+    return api.onNotificationsChanged?.(() => void reload())
+  }, [api, reload])
 
   const refresh = useCallback(
     (force = false) => {
@@ -50,7 +51,11 @@ export function useActivity(
         try {
           const result = await api.syncActivity(projectKey ? projectKey.split('|') : [], force)
           if (current !== epoch.current) return
-          setState({ items: result.items, lastCheckedAt: result.lastCheckedAt })
+          setState({
+            items: result.items,
+            lastCheckedAt: result.lastCheckedAt,
+            nativeError: result.nativeError,
+          })
           setError(result.errors.join(' · '))
         } catch (error) {
           if (current === epoch.current) setError(errorMessage(error))

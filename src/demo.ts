@@ -1,8 +1,9 @@
 import type { AtlasAPI, Issue, IssueDetail, Project, NotificationState } from './shared/types'
 import { collectAssets, issueMarkdown } from './shared/export'
 import { strToU8, zipSync } from 'fflate'
-import { defaultEmailSettings, emptyEmailStatus } from './shared/email'
-import { readNotificationPreferences } from './shared/activity'
+import { emptyEmailStatus } from './shared/email'
+import { defaultGrokSettings } from './shared/grok'
+import { readNotificationPreferences, isOwnNotification } from './shared/activity'
 import { metricSnapshot } from './shared/metrics'
 import { defaultAISettings, defaultProjectEstimates, type IssueEstimate } from './shared/estimates'
 import { defaultMonitoringSettings, emptyMonitoringStatus } from './shared/monitoring'
@@ -11,10 +12,19 @@ const base = 'https://github.servizi.allitude.it'
 const createdAt = '2026-10-21T08:24:00Z'
 const updatedAt = '2026-10-23T08:42:00Z'
 const demoNotificationKey = 'atlas:demo-notifications:v1'
+const demoLogin = 'giulia.rossi'
+function readOwnDemoNotifications(state: NotificationState): NotificationState {
+  return {
+    ...state,
+    items: state.items.map((item) =>
+      isOwnNotification(item, demoLogin) ? { ...item, read: true } : item,
+    ),
+  }
+}
 function demoNotifications(): NotificationState {
   try {
     const saved = JSON.parse(localStorage.getItem(demoNotificationKey) || 'null')
-    if (Array.isArray(saved?.items)) return saved
+    if (Array.isArray(saved?.items)) return readOwnDemoNotifications(saved)
   } catch {
     /* Rebuild synthetic demo data. */
   }
@@ -31,6 +41,7 @@ function demoNotifications(): NotificationState {
         read: false,
         fromStatus: 'Todo',
         toStatus: 'In progress',
+        actors: [{ login: 'marco.bianchi', name: 'Marco Bianchi' }],
       },
       {
         id: 'demo-comment',
@@ -40,6 +51,7 @@ function demoNotifications(): NotificationState {
         createdAt: now - 12 * 60_000,
         read: false,
         newCommentCount: 2,
+        actors: [{ login: 'giulia.rossi', name: 'Giulia Rossi' }],
       },
       {
         id: 'demo-new',
@@ -48,11 +60,13 @@ function demoNotifications(): NotificationState {
         issue: demoIssues[2],
         createdAt: now - 35 * 60_000,
         read: false,
+        actors: [{ login: 'giulia.rossi', name: 'Giulia Rossi' }],
       },
     ],
   }
-  localStorage.setItem(demoNotificationKey, JSON.stringify(state))
-  return state
+  const result = readOwnDemoNotifications(state)
+  localStorage.setItem(demoNotificationKey, JSON.stringify(result))
+  return result
 }
 export const demoProjects: Project[] = [
   {
@@ -379,7 +393,7 @@ export const demoAPI: AtlasAPI = {
   testConnection: async () => {
     throw new Error('La connessione a GitHub e il Portachiavi sono disponibili nell’app macOS.')
   },
-  projects: async () => ({ projects: demoProjects, warnings: [], login: 'Demo workspace' }),
+  projects: async () => ({ projects: demoProjects, warnings: [], login: demoLogin }),
   cachedWorkspace: async () => null,
   projectLayout: async () => ({
     statusFieldName: 'Status',
@@ -445,20 +459,21 @@ export const demoAPI: AtlasAPI = {
     localStorage.setItem(`atlas:demo-notification-preferences:${projectId}`, JSON.stringify(value))
     return value
   },
-  emailSettings: async () => defaultEmailSettings(),
-  emailStatus: async () => emptyEmailStatus(),
-  saveEmailSettings: async () => {
+  grokHistory: async () => [],
+  grokSettings: async () => defaultGrokSettings(),
+  grokStatus: async () => emptyEmailStatus(),
+  saveGrokSettings: async () => {
     throw new Error(
-      'Le impostazioni SMTP si salvano nell’app macOS. La demo non conserva credenziali.',
+      'Le impostazioni Grok si salvano nell’app macOS. La demo non conserva credenziali.',
     )
   },
-  verifyEmail: async () => {
-    throw new Error('La verifica SMTP è disponibile nell’app macOS.')
+  verifyGrok: async () => {
+    throw new Error('La verifica webhook è disponibile nell’app macOS.')
   },
-  testEmail: async () => {
-    throw new Error('L’invio della mail di prova è disponibile nell’app macOS.')
+  testGrok: async () => {
+    throw new Error('L’invio della evento di prova è disponibile nell’app macOS.')
   },
-  retryEmail: async () => {},
+  retryGrok: async () => {},
   syncActivity: async () => {
     const state = { ...demoNotifications(), lastCheckedAt: Date.now() }
     localStorage.setItem(demoNotificationKey, JSON.stringify(state))

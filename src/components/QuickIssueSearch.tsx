@@ -2,7 +2,44 @@ import { useEffect, useId, useRef, useState } from 'react'
 import { ArrowUpRight, FolderKanban, Hash, LoaderCircle, Search, X } from 'lucide-react'
 import type { AtlasAPI, IssueLocation, Project } from '../shared/types'
 import { errorMessage } from '../shared/errors'
+import { sortIssueLocations } from '../shared/activity'
 import { useDialog } from './useDialog'
+
+const date = new Intl.DateTimeFormat('it-IT', { day: 'numeric', month: 'short', year: 'numeric' })
+
+export function QuickIssueResult({
+  location,
+  project,
+}: {
+  location: IssueLocation
+  project?: Project
+}) {
+  const createdAt = Date.parse(location.issue.createdAt)
+  return (
+    <>
+      <span className="quick-result-number">
+        <Hash size={15} />
+        {location.issue.number}
+      </span>
+      <span className="quick-result-main">
+        <strong className="quick-result-project">
+          <FolderKanban size={16} />
+          <span>{project?.title ?? location.projectId}</span>
+        </strong>
+        <span className="quick-result-title">{location.issue.title}</span>
+        <span className="quick-result-meta">
+          <span>
+            {location.issue.repository} · {location.issue.status}
+          </span>
+          {Number.isFinite(createdAt) && (
+            <time dateTime={location.issue.createdAt}>Creata il {date.format(createdAt)}</time>
+          )}
+        </span>
+      </span>
+      <ArrowUpRight size={16} />
+    </>
+  )
+}
 
 export function QuickIssueSearch({
   api,
@@ -39,7 +76,7 @@ export function QuickIssueSearch({
         .findIssues(number!, JSON.parse(projectKey))
         .then((result) => {
           if (!active) return
-          setMatches(result.matches)
+          setMatches(sortIssueLocations(result.matches))
           setError(result.warnings.join(' · '))
           onActivityChange()
         })
@@ -112,7 +149,7 @@ export function QuickIssueSearch({
         </div>
         <div className="quick-search-heading">
           <h2 id={`${id}-title`}>Ricerca rapida</h2>
-          <span>Nei progetti visibili, in tutti gli stati</span>
+          <span>Progetti visibili · issue più recenti prima</span>
         </div>
         {error && (
           <p className="activity-error" role="status">
@@ -140,22 +177,10 @@ export function QuickIssueSearch({
               onMouseEnter={() => setSelected(index)}
               onClick={() => openIssue(location)}
             >
-              <span className="quick-result-number">
-                <Hash size={15} />
-                {location.issue.number}
-              </span>
-              <span className="quick-result-main">
-                <strong>{location.issue.title}</strong>
-                <span>
-                  {location.issue.repository} · {location.issue.status}
-                </span>
-                <span className="quick-result-project">
-                  <FolderKanban size={13} />
-                  {projects.find((project) => project.id === location.projectId)?.title ??
-                    location.projectId}
-                </span>
-              </span>
-              <ArrowUpRight size={16} />
+              <QuickIssueResult
+                location={location}
+                project={projects.find((project) => project.id === location.projectId)}
+              />
             </button>
           ))}
           {!matches.length && (

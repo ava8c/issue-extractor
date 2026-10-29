@@ -33,6 +33,7 @@ const issue = {
 const changedDate = '2026-10-24T09:00:00Z'
 const activityScans = new Map()
 const estimateFixtures = new Map()
+const notificationFixtures = new Map()
 const item = (id, status, updatedAt = date, type = 'Issue') => ({
   fieldValueByName: status ? { name: status } : null,
   content: { __typename: type, id, updatedAt },
@@ -44,6 +45,11 @@ const server = http.createServer((req, res) => {
   })
   req.on('end', () => {
     res.setHeader('Content-Type', 'application/json')
+    if (req.url === '/notification-fixture' && req.method === 'POST') {
+      const fixture = JSON.parse(body)
+      notificationFixtures.set(fixture.id, fixture)
+      return res.end('{}')
+    }
     if (req.url === '/estimate-fixture' && req.method === 'POST') {
       const fixture = JSON.parse(body)
       estimateFixtures.set(fixture.id, fixture)
@@ -98,6 +104,51 @@ const server = http.createServer((req, res) => {
     }
     try {
       const { query, variables: v = {} } = JSON.parse(body)
+      if (notificationFixtures.has(v.id)) {
+        const fixture = notificationFixtures.get(v.id)
+        if (query.includes('query ProjectActivityItems'))
+          return res.end(JSON.stringify({ data: { node: { items: page(fixture.items) } } }))
+        if (query.includes('query NotificationCommentActors')) {
+          const end = v.before ? Number(v.before.replace('actors-', '')) : fixture.comments.length
+          const start = Math.max(0, end - v.last)
+          return res.end(
+            JSON.stringify({
+              data: {
+                node: {
+                  comments: {
+                    totalCount: fixture.comments.length,
+                    nodes: fixture.comments.slice(start, end),
+                    pageInfo: { hasPreviousPage: start > 0, startCursor: `actors-${start}` },
+                  },
+                },
+              },
+            }),
+          )
+        }
+        if (query.includes('query NotificationStatusActors')) {
+          if (fixture.unsupportedTimeline)
+            return res.end(
+              JSON.stringify({
+                errors: [{ message: "Unknown type 'ProjectV2ItemStatusChangedEvent'" }],
+              }),
+            )
+          const offset = v.cursor ? Number(v.cursor.replace('events-', '')) : 0
+          const events = fixture.events.filter((event) => event.createdAt >= v.since)
+          return res.end(
+            JSON.stringify({
+              data: {
+                node: {
+                  timelineItems: page(
+                    events.slice(offset, offset + 100),
+                    events.length > offset + 100,
+                    `events-${offset + 100}`,
+                  ),
+                },
+              },
+            }),
+          )
+        }
+      }
       if (estimateFixtures.has(v.id)) {
         const fixture = estimateFixtures.get(v.id)
         if (query.includes('query EstimateCommentsDelta')) {

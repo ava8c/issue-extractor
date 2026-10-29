@@ -5,7 +5,7 @@ import rehypeRaw from 'rehype-raw'
 import rehypeSanitize from 'rehype-sanitize'
 import { Copy, Expand, ImageOff, LoaderCircle } from 'lucide-react'
 import type { AtlasAPI } from '../shared/types'
-import { errorMessage } from '../shared/errors'
+import { errorMessage, isGitHubUnavailable } from '../shared/errors'
 import { imageCache } from '../shared/image-cache'
 import { useHandoff } from './HandoffContext'
 
@@ -80,7 +80,11 @@ export function AssetImage({
       ) : (
         <span className="image-placeholder">
           {error ? <ImageOff size={24} /> : <LoaderCircle className="spin" size={24} />}
-          <span>{error || 'Caricamento immagine…'}</span>
+          <span>
+            {isGitHubUnavailable(error)
+              ? 'Immagine non ancora caricata. In attesa della VPN.'
+              : error || 'Caricamento immagine…'}
+          </span>
         </span>
       )}
       <span className="image-caption">

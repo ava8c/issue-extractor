@@ -39,6 +39,13 @@
 .workspace-card > div > span {
   color: #647086;
 }
+.workspace-card > div > .vpn-status {
+  color: #9a661e;
+  font-weight: 600;
+}
+.connection-dot.offline {
+  background: #c48b36;
+}
 .nav-primary > button {
   font-size: 12px;
   color: #4d5c74;
@@ -173,6 +180,38 @@
   color: #586780;
   font-size: 12px;
   line-height: 1.7;
+}
+.project-notification-toggle {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid #dce2ed;
+  border-radius: 8px;
+  margin: 16px 0;
+  cursor: pointer;
+}
+.project-notification-toggle input {
+  accent-color: #7552b8;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+.project-notification-toggle span {
+  display: grid;
+  gap: 5px;
+}
+.project-notification-toggle strong {
+  color: #40516f;
+  font-size: 13px;
+}
+.project-notification-toggle small {
+  color: #586780;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.project-notification-settings fieldset:disabled {
+  opacity: 0.55;
 }
 .project-notification-settings fieldset {
   border: 1px solid #dce2ed;

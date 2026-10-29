@@ -1,28 +1,5 @@
 import type { IssueNotification } from './types'
 
-export interface EmailSettings {
-  enabled: boolean
-  host: string
-  port: number
-  security: 'tls' | 'starttls'
-  username: string
-  from: string
-  recipients: string[]
-  hasPassword: boolean
-}
-export interface EmailSettingsInput extends Omit<EmailSettings, 'hasPassword'> {
-  password?: string
-}
-export const defaultEmailSettings = (): EmailSettings => ({
-  enabled: false,
-  host: '',
-  port: 465,
-  security: 'tls',
-  username: '',
-  from: '',
-  recipients: [],
-  hasPassword: false,
-})
 export interface EmailTarget {
   revision: string
   recipients: string[]

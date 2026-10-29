@@ -6,7 +6,7 @@ await build({
   format: 'esm',
   target: 'node22',
   outfile: 'dist-electron/main.js',
-  external: ['electron', 'nodemailer', '@modelcontextprotocol/sdk', 'zod'],
+  external: ['electron', '@modelcontextprotocol/sdk', 'zod'],
   sourcemap: true,
 })
 await build({

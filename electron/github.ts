@@ -7,9 +7,11 @@ import type {
   Workspace,
   ProjectLayout,
   IssueNotification,
+  Author,
 } from '../src/shared/types'
 import { mapConcurrent } from '../src/shared/loading'
 import type { EstimateBaseline, EstimateContent } from '../src/shared/estimates'
+import { GITHUB_UNAVAILABLE, isGitHubUnavailable } from '../src/shared/errors'
 
 export function normalizeHost(value: string): string {
   const url = new URL(value.trim())
@@ -41,6 +43,8 @@ interface ItemIndex {
 }
 
 export class GitHubClient {
+  private login = ''
+  private identityRequest: Promise<string> | null = null
   private urls: ReturnType<typeof endpoints>
   private supportsItemQuery = true
   private contentRequests = new Map<string, Promise<EstimateContent>>()
@@ -68,9 +72,7 @@ export class GitHubClient {
         },
       })
     } catch {
-      throw new Error(
-        'GitHub non è raggiungibile. Controlla indirizzo, VPN e certificato aziendale, poi riprova.',
-      )
+      throw new Error(GITHUB_UNAVAILABLE)
     }
     if (!response.ok) {
       const retry = response.headers.get('retry-after')
@@ -112,7 +114,20 @@ export class GitHubClient {
     const result = await this.graphql<{ viewer: { login: string } }>(
       'query Identity { viewer { login } }',
     )
-    return result.viewer.login
+    this.login = result.viewer.login
+    return this.login
+  }
+
+  async authenticatedLogin(): Promise<string> {
+    if (this.login) return this.login
+    if (this.identityRequest) return this.identityRequest
+    const request = this.testConnection()
+    this.identityRequest = request
+    try {
+      return await request
+    } finally {
+      if (this.identityRequest === request) this.identityRequest = null
+    }
   }
 
   private async connection<T>(
@@ -149,6 +164,7 @@ export class GitHubClient {
       )
       discovered.forEach((o) => organizations.add(o.login))
     } catch (e) {
+      if (isGitHubUnavailable(e)) throw e
       warnings.push(`Scoperta organizzazioni: ${(e as Error).message}`)
     }
     const projects: Project[] = []
@@ -170,6 +186,7 @@ export class GitHubClient {
         )
         return nodes.map(map)
       } catch (e) {
+        if (isGitHubUnavailable(e)) throw e
         warnings.push(`${owner.login}: ${(e as Error).message}`)
         return []
       }
@@ -190,6 +207,7 @@ export class GitHubClient {
         if (!data[type]?.projectV2) throw new Error('Progetto non accessibile.')
         projects.push(map(data[type].projectV2))
       } catch (e) {
+        if (isGitHubUnavailable(e)) throw e
         warnings.push(`Progetto aggiunto: ${(e as Error).message}`)
       }
     }
@@ -214,7 +232,7 @@ export class GitHubClient {
     const fields = SUMMARY.replace(' labels(first: 30) { nodes { name color } }', '')
     const pullRequest = fields.replace(' state ', ' pullRequestState: state ')
     const nodes = await this.connection<any>(
-      `query ProjectActivityItems($id: ID!, $cursor: String, $statusFieldName: String!) { node(id: $id) { ... on ProjectV2 { items(first: 100, after: $cursor) { nodes { fieldValueByName(name: $statusFieldName) { ... on ProjectV2ItemFieldSingleSelectValue { name } } content { __typename ... on Issue { ${fields} } ... on PullRequest { ${pullRequest} } ... on DraftIssue { id title createdAt updatedAt } } } ${PAGE} } } } }`,
+      `query ProjectActivityItems($id: ID!, $cursor: String, $statusFieldName: String!) { node(id: $id) { ... on ProjectV2 { items(first: 100, after: $cursor) { nodes { ${AUTHOR.replace('author', 'creator')} fieldValueByName(name: $statusFieldName) { ... on ProjectV2ItemFieldSingleSelectValue { name } } content { __typename ... on Issue { ${fields} } ... on PullRequest { ${pullRequest} } ... on DraftIssue { id title createdAt updatedAt } } } ${PAGE} } } } }`,
       { id: projectId, statusFieldName },
       (data) => data.node?.items,
     )
@@ -241,8 +259,78 @@ export class GitHubClient {
               : c.__typename === 'PullRequest'
                 ? 'pull-request'
                 : 'issue',
+          projectItemCreator: node.creator ?? null,
         }
       })
+  }
+
+  async notificationActors(
+    notification: IssueNotification,
+    previous: Issue | undefined,
+    since: number,
+  ): Promise<(Author | null)[]> {
+    const issue = notification.issue
+    if (notification.type === 'new-issue') return [issue.projectItemCreator ?? null]
+    if (issue.kind === 'draft') return [null]
+    const type = issue.kind === 'pull-request' ? 'PullRequest' : 'Issue'
+    if (notification.type === 'comment') {
+      const count = notification.newCommentCount ?? 0
+      if (count <= 0) return [null]
+      const actors: (Author | null)[] = []
+      let before: string | null = null
+      do {
+        const data: any = await this.graphql(
+          `query NotificationCommentActors($id: ID!, $before: String, $last: Int!) { node(id: $id) { ... on ${type} { comments(last: $last, before: $before) { totalCount nodes { ${AUTHOR} } pageInfo { hasPreviousPage startCursor } } } } }`,
+          { id: issue.id, before, last: Math.min(100, count - actors.length) },
+        )
+        const page = data.node?.comments
+        if (!page || page.totalCount !== issue.commentCount) return [null]
+        actors.unshift(...page.nodes.map((comment: any) => comment?.author ?? null))
+        if (actors.length >= count) return actors
+        if (
+          !page.pageInfo.hasPreviousPage ||
+          !page.pageInfo.startCursor ||
+          page.pageInfo.startCursor === before
+        )
+          return [null]
+        before = page.pageInfo.startCursor
+      } while (before)
+      return [null]
+    }
+    if (!previous) return [null]
+    const projectChanged = previous.status !== issue.status
+    const stateChanged = previous.state !== issue.state
+    const actor = AUTHOR.replace('author', 'actor')
+    const events = await this.connection<any>(
+      `query NotificationStatusActors($id: ID!, $cursor: String, $since: DateTime!) { node(id: $id) { ... on ${type} { timelineItems(first: 100, after: $cursor, since: $since) { nodes { __typename ${projectChanged ? `... on ProjectV2ItemStatusChangedEvent { ${actor} project { id } status wasAutomated }` : ''} ${stateChanged ? `... on ClosedEvent { ${actor} } ... on ReopenedEvent { ${actor} } ${type === 'PullRequest' ? `... on MergedEvent { ${actor} }` : ''}` : ''} } ${PAGE} } } } }`,
+      { id: issue.id, since: new Date(since).toISOString() },
+      (data) => data.node?.timelineItems,
+    )
+    const latest = events.reverse()
+    const actors: (Author | null)[] = []
+    if (projectChanged) {
+      const event = latest.find(
+        (event) =>
+          event.__typename === 'ProjectV2ItemStatusChangedEvent' &&
+          event.project?.id === notification.projectId,
+      )
+      actors.push(
+        event?.status === issue.status && !event.wasAutomated ? (event.actor ?? null) : null,
+      )
+    }
+    if (stateChanged) {
+      const kind =
+        issue.state === 'CLOSED'
+          ? 'ClosedEvent'
+          : issue.state === 'MERGED'
+            ? 'MergedEvent'
+            : 'ReopenedEvent'
+      const event = latest.find((event) =>
+        ['ClosedEvent', 'ReopenedEvent', 'MergedEvent'].includes(event.__typename),
+      )
+      actors.push(event?.__typename === kind ? (event.actor ?? null) : null)
+    }
+    return actors
   }
 
   async issues(
@@ -445,7 +533,7 @@ export class GitHubClient {
           ? 'PullRequest'
           : 'Issue'
     const data = await this.graphql<any>(
-      `query IssueDetail($id: ID!) { node(id: $id) { ... on ${type} { ${issue.kind === 'draft' ? 'id title body updatedAt' : `${ISSUE} ${AUTHOR}`} } } }`,
+      `query IssueDetail($id: ID!) { node(id: $id) { ... on ${type} { ${issue.kind === 'draft' ? 'id title body updatedAt' : `${ISSUE} ${AUTHOR} assignees(first: 100) { nodes { login name } }`} } } }`,
       { id: issue.id },
     )
     const fresh = data.node
@@ -464,6 +552,7 @@ export class GitHubClient {
       body: fresh.body ?? '',
       state: fresh.state,
       author: fresh.author ?? null,
+      assignees: fresh.assignees?.nodes ?? [],
       updatedAt: fresh.updatedAt,
       labels: fresh.labels.nodes,
       commentCount: comments.length,
@@ -482,13 +571,15 @@ export class GitHubClient {
           ? 'PullRequest'
           : 'Issue'
     const data = await this.graphql<any>(
-      `query NotificationContent($id: ID!) { node(id: $id) { ... on ${type} { ${issue.kind === 'draft' ? 'id title body updatedAt' : ISSUE} } } }`,
+      `query NotificationContent($id: ID!) { node(id: $id) { ... on ${type} { ${issue.kind === 'draft' ? 'id title body updatedAt' : `${ISSUE} ${AUTHOR} assignees(first: 100) { nodes { login name } }`} } } }`,
       { id: issue.id },
     )
     if (!data.node?.id) throw new Error('Contenuto della issue non disponibile.')
     return {
       ...issue,
       title: data.node.title,
+      author: data.node.author ?? null,
+      assignees: data.node.assignees?.nodes ?? [],
       body: data.node.body ?? '',
       comments: [],
       commentsComplete: false,

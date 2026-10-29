@@ -1,4 +1,3 @@
-import type { EmailSettingsInput } from '../../src/shared/email'
 import type { IssueDetail, IssueNotification } from '../../src/shared/types'
 
 export const image = Buffer.from(
@@ -44,16 +43,6 @@ export const notification: IssueNotification = {
   createdAt: Date.parse('2026-10-24T10:01:00Z'),
   read: false,
   newCommentCount: 1,
-}
-export const smtpSettings: EmailSettingsInput = {
-  enabled: true,
-  host: 'smtp.example.com',
-  port: 465,
-  security: 'tls',
-  username: 'mailer',
-  password: 'test-password-only',
-  from: 'atlas@example.com',
-  recipients: ['first@example.com', 'second@example.com'],
 }
 export const secrets = {
   encrypt: async (value: string) => Buffer.from(`test-cipher:${value}`).toString('base64'),

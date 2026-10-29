@@ -31,6 +31,7 @@ export interface Issue {
   createdAt: string
   updatedAt: string
   kind: 'issue' | 'draft' | 'pull-request'
+  projectItemCreator?: Author | null
 }
 export interface ProjectStatus {
   id: string
@@ -58,6 +59,7 @@ export interface Comment {
   author?: Author | null
 }
 export interface IssueDetail extends Issue {
+  assignees?: Author[]
   author?: Author | null
   comments: Comment[]
   commentsComplete: boolean
@@ -105,10 +107,12 @@ export interface IssueNotification extends IssueLocation {
   fromStatus?: string
   toStatus?: string
   newCommentCount?: number
+  actors?: (Author | null)[]
 }
 export interface NotificationState {
   items: IssueNotification[]
   lastCheckedAt: number | null
+  nativeError?: string
 }
 export interface ActivitySyncResult extends NotificationState {
   errors: string[]
@@ -145,6 +149,8 @@ export interface AtlasAPI {
   issues: (projectId: string, statusFieldName?: string, statuses?: string[]) => Promise<Issue[]>
   findIssues: (number: number, projectIds: string[]) => Promise<IssueSearchResult>
   notifications: () => Promise<NotificationState>
+  onNotificationsChanged?: (callback: () => void) => () => void
+  onNotificationOpen?: (callback: (location: IssueLocation) => void) => () => void
   projectMetrics: (projectIds: string[]) => Promise<ProjectMetricSnapshot[]>
   notificationPreferences: (projectId: string) => Promise<ProjectNotificationPreferences>
   saveNotificationPreferences: (
@@ -153,12 +159,13 @@ export interface AtlasAPI {
   ) => Promise<ProjectNotificationPreferences>
   syncActivity: (projectIds: string[], force?: boolean) => Promise<ActivitySyncResult>
   markNotificationsRead: (ids: string[]) => Promise<NotificationState>
-  emailSettings: () => Promise<EmailSettings>
-  saveEmailSettings: (input: EmailSettingsInput) => Promise<EmailSettings>
-  verifyEmail: (input: EmailSettingsInput) => Promise<void>
-  testEmail: (input: EmailSettingsInput) => Promise<number>
-  emailStatus: () => Promise<EmailStatus>
-  retryEmail: (includeUncertain?: boolean) => Promise<void>
+  grokHistory: () => Promise<EmailJob[]>
+  grokSettings: () => Promise<GrokSettings>
+  saveGrokSettings: (input: GrokSettingsInput) => Promise<GrokSettings>
+  verifyGrok: (input: GrokSettingsInput) => Promise<void>
+  testGrok: (input: GrokSettingsInput) => Promise<number>
+  grokStatus: () => Promise<EmailStatus>
+  retryGrok: (includeUncertain?: boolean) => Promise<void>
   issue: (issue: Issue) => Promise<IssueDetail>
   asset: (url: string) => Promise<AssetResult>
   copyImage: (url: string) => Promise<void>
@@ -171,7 +178,8 @@ declare global {
     atlas?: AtlasAPI
   }
 }
-import type { EmailSettings, EmailSettingsInput, EmailStatus } from './email'
+import type { GrokSettings, GrokSettingsInput } from './grok'
+import type { EmailStatus, EmailJob } from './email'
 import type { MonitoringSettings, MonitoringSettingsInput, MonitoringStatus } from './monitoring'
 import type { HandoffStatus } from './handoff'
 import type { ProjectNotificationPreferences } from './activity'

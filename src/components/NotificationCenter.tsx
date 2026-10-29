@@ -31,6 +31,7 @@ export function NotificationCenter({
   lastCheckedAt,
   syncing,
   error,
+  nativeError,
   onRefresh,
   onRead,
   onOpen,
@@ -41,6 +42,7 @@ export function NotificationCenter({
   lastCheckedAt: number | null
   syncing: boolean
   error: string
+  nativeError?: string
   onRefresh: () => void
   onRead: (ids: string[]) => void
   onOpen: (location: IssueLocation) => void
@@ -124,6 +126,11 @@ export function NotificationCenter({
         {error && (
           <p className="activity-error" role="status">
             Aggiornamento incompleto: {error}. I dati precedenti sono conservati.
+          </p>
+        )}
+        {nativeError && (
+          <p className="activity-error" role="status">
+            {nativeError}
           </p>
         )}
         <div
